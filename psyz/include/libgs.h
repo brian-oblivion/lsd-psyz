@@ -771,8 +771,9 @@ void GsGetLws(GsCOORDINATE2* coord, MATRIX* lw, MATRIX* ls);
  * Calculates GsWSMATRIX from viewpoint information.
  *
  * @param pv Viewpoint position information
+ * @return 0 on success
  */
-void GsSetRefView2(GsRVIEW2* pv);
+int GsSetRefView2(GsRVIEW2* pv);
 
 /**
  * @brief Set viewpoint (reference type, high precision)
@@ -780,8 +781,9 @@ void GsSetRefView2(GsRVIEW2* pv);
  * High precision version of GsSetRefView2().
  *
  * @param pv Viewpoint position information
+ * @return 0 on success
  */
-void GsSetRefView2L(GsRVIEW2* pv);
+int GsSetRefView2L(GsRVIEW2* pv);
 
 /**
  * @brief Set viewpoint (matrix type)
@@ -789,42 +791,44 @@ void GsSetRefView2L(GsRVIEW2* pv);
  * Directly sets GsWSMATRIX from a matrix.
  *
  * @param pv Viewpoint position information
+ * @return 0 on success
  */
-void GsSetView2(GsVIEW2* pv);
+int GsSetView2(GsVIEW2* pv);
 
 /**
  * @brief Link object to TMD data (version 4)
  *
- * Links a GsDOBJ2 structure to TMD-format model data.
+ * Links a GsDOBJ2 structure to object n of TMD-format model data that
+ * GsMapModelingData() has mapped.
  *
- * @param objnum Number of objects
- * @param base Pointer to TMD data
- * @param objp Pointer to object handler array
+ * @param tmd_base Address of the TMD data's first object
+ * @param objp Pointer to object handler
+ * @param n Object number in the TMD data
  */
-void GsLinkObject4(u_long objnum, u_long* base, GsDOBJ2* objp);
+void GsLinkObject4(u_long tmd_base, GsDOBJ2* objp, int n);
 
 /**
  * @brief Link object to PMD data (version 3)
  *
  * Links a GsDOBJ3 structure to PMD-format model data.
  *
- * @param objnum Number of objects
- * @param base Pointer to PMD data
- * @param objp Pointer to object handler array
+ * @param pmd_base Address of the PMD data's first object
+ * @param objp Pointer to object handler
+ * @return Address after the object's data
  */
-void GsLinkObject3(u_long objnum, u_long* base, GsDOBJ3* objp);
+u_long GsLinkObject3(u_long pmd_base, GsDOBJ3* objp);
 
 /**
  * @brief Link object to TMD data (version 5)
  *
- * Links a GsDOBJ5 structure to TMD-format model data with preset packet
- * support.
+ * Links a GsDOBJ5 structure to object n of TMD-format model data, for use
+ * with preset packets.
  *
- * @param objnum Number of objects
- * @param base Pointer to TMD data
- * @param objp Pointer to object handler array
+ * @param tmd_base Address of the TMD data's first object
+ * @param objp Pointer to object handler
+ * @param n Object number in the TMD data
  */
-void GsLinkObject5(u_long objnum, u_long* base, GsDOBJ5* objp);
+void GsLinkObject5(u_long tmd_base, GsDOBJ5* objp, int n);
 
 /**
  * @brief Sort 3D object to OT (version 4)
@@ -834,8 +838,10 @@ void GsLinkObject5(u_long objnum, u_long* base, GsDOBJ5* objp);
  *
  * @param objp Pointer to object handler
  * @param otp Pointer to ordering table
+ * @param shift Right shift from the object's Z to its OT position
+ * @param scratch Work area, normally the scratchpad
  */
-void GsSortObject4(GsDOBJ2* objp, GsOT* otp);
+void GsSortObject4(GsDOBJ2* objp, GsOT* otp, int shift, u_long* scratch);
 
 /**
  * @brief Sort 3D object to OT (version 3)
@@ -844,8 +850,9 @@ void GsSortObject4(GsDOBJ2* objp, GsOT* otp);
  *
  * @param objp Pointer to object handler
  * @param otp Pointer to ordering table
+ * @param shift Right shift from the object's Z to its OT position
  */
-void GsSortObject3(GsDOBJ3* objp, GsOT* otp);
+void GsSortObject3(GsDOBJ3* objp, GsOT* otp, int shift);
 
 /**
  * @brief Sort 3D object to OT (version 5)
@@ -854,8 +861,10 @@ void GsSortObject3(GsDOBJ3* objp, GsOT* otp);
  *
  * @param objp Pointer to object handler
  * @param otp Pointer to ordering table
+ * @param shift Right shift from the object's Z to its OT position
+ * @param scratch Work area, normally the scratchpad
  */
-void GsSortObject5(GsDOBJ5* objp, GsOT* otp);
+void GsSortObject5(GsDOBJ5* objp, GsOT* otp, int shift, u_long* scratch);
 
 /**
  * @brief Sort background to OT
@@ -939,8 +948,9 @@ void GsSetAmbient(long r, long g, long b);
  *
  * @param id Light source ID (0-2)
  * @param light Pointer to light source data
+ * @return 0 on success
  */
-void GsSetFlatLight(int id, GsF_LIGHT* light);
+int GsSetFlatLight(int id, GsF_LIGHT* light);
 
 /**
  * @brief Set fog parameter
@@ -1010,11 +1020,13 @@ PACKET* GsGetWorkBase(void);
 /**
  * @brief Multiply coordinate matrices
  *
- * Multiplies coordinate system matrices.
+ * Multiplies two coordinate matrices, rotation and translation: m2 = m1 *
+ * m2.
  *
- * @param coord Pointer to coordinate system
+ * @param m1 Pointer to first matrix
+ * @param m2 Pointer to second matrix (input/output)
  */
-void GsMulCoord2(GsCOORDINATE2* coord);
+void GsMulCoord2(MATRIX* m1, MATRIX* m2);
 
 /**
  * @brief Set lighting mode
