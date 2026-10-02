@@ -124,6 +124,18 @@ int VSyncCallbacks(int ch, void (*f)());
 void* DMACallback(int dma, void (*func)());
 
 /**
+ * @brief Register an interrupt callback function.
+ *
+ * psyz raises interrupt 0 (VBLANK, counted by RCntCNT3) and 6 (root counter
+ * 2) at the rates SetRCnt programs.
+ *
+ * @param irq Interrupt number
+ * @param func Pointer to callback function (NULL to unregister)
+ * @return Previous callback function pointer
+ */
+void* InterruptCallback(int irq, void (*func)());
+
+/**
  * @brief Initialize all callbacks.
  *
  * Initializes all system callbacks, setting all callback functions to
