@@ -783,6 +783,149 @@ static int read_raw_sector(int sector, u_char* out) {
     return result;
 }
 
+// CD streaming, for STR movies: CdRead2 with CdlModeStream starts it, and
+// StGetNext hands out one video frame at a time, assembled from the
+// stream's data sectors (each opens with a 32-byte StHEADER and carries
+// 2016 bytes of the frame). The drive is modelled by time: a sector is
+// readable once the drive, started at CdRead2, would have reached it.
+#define ST_SECTOR_DATA 2016
+#define ST_MAX_FRAME_SECTORS 64
+#define ST_HEADER_ID 0x0160
+
+static struct {
+    int active;
+    FILE* file;
+    const TrackEntry* track;
+    int next_sector; // the next sector to read
+    int start_sector;
+    int start_vsync;
+    int sectors_per_second;
+    u32 start_frame, end_frame;
+    void (*on_frame)();
+    void (*on_end)();
+    int held;      // a frame is with the caller until StFreeRing
+    u32 cur_frame; // the frame being collected
+    int collected; // its sectors so far
+    int nsectors;  // and how many it has
+    StHEADER header;
+    // + slack: DecDCTvlc may read a little past the frame's last bits
+    u32 frame[ST_MAX_FRAME_SECTORS * ST_SECTOR_DATA / 4 + 64];
+} st;
+
+static void st_stop(void) {
+    if (st.file) {
+        fclose(st.file);
+    }
+    st.file = NULL;
+    st.track = NULL;
+    st.active = 0;
+    st.held = 0;
+    st.collected = 0;
+}
+
+static void st_start(int sector, int sectors_per_second) {
+    st_stop();
+    st.active = 1;
+    st.start_sector = st.next_sector = sector;
+    st.sectors_per_second = sectors_per_second;
+    st.start_vsync = VSync(-1);
+}
+
+static u16 st_u16(const u_char* p) { return (u16)(p[0] | p[1] << 8); }
+static u32 st_u32(const u_char* p) { return st_u16(p) | (u32)st_u16(p + 2) << 16; }
+
+// Reads the stream's next sector into `raw` (2352 bytes). 0 at the end of
+// the disc or on a read error.
+static int st_read_sector(u_char* raw) {
+    TrackEntry* track = find_track_for_sector(st.next_sector);
+    if (!track) {
+        return 0;
+    }
+    if (track != st.track) {
+        if (st.file) {
+            fclose(st.file);
+        }
+        st.file = fopen(track->file_path, "rb");
+        st.track = track;
+        if (!st.file) {
+            ERRORF("failed to open %s", track->file_path);
+            return 0;
+        }
+    }
+    long offset = (long)(st.next_sector - track->abs_sector +
+                         track->start_sector) * SECTOR_SIZE;
+    if (fseek(st.file, offset, SEEK_SET) != 0 ||
+        fread(raw, 1, SECTOR_SIZE, st.file) != SECTOR_SIZE) {
+        return 0;
+    }
+    st.next_sector++;
+    return 1;
+}
+
+// Reads the sectors the drive has reached, up to the end of a frame. 1
+// when a whole frame is in st.frame and st.header.
+static int st_next_frame(void) {
+    if (!st.active || st.held) {
+        return 0;
+    }
+    const int reached = st.start_sector + (int)((long long)(VSync(-1) - st.start_vsync) *
+                                                st.sectors_per_second / 60);
+    u_char raw[SECTOR_SIZE];
+    while (st.next_sector < reached) {
+        if (!st_read_sector(raw)) {
+            st_stop();
+            return 0;
+        }
+        const u_char* user = raw + 24;
+        // Form 1 data sectors with a stream header; the XA audio between
+        // them is psyz_xa_read's.
+        if (!(raw[0x12] & 0x08) || st_u16(user) != ST_HEADER_ID) {
+            continue;
+        }
+        const int index = st_u16(user + 4);
+        const int count = st_u16(user + 6);
+        const u32 frame = st_u32(user + 8);
+        if (count <= 0 || count > ST_MAX_FRAME_SECTORS || index >= count) {
+            continue;
+        }
+        if (frame != st.cur_frame || st.collected == 0) {
+            st.cur_frame = frame;
+            st.collected = 0;
+            st.nsectors = count;
+        }
+        memcpy((u_char*)st.frame + index * ST_SECTOR_DATA, user + 32,
+               ST_SECTOR_DATA);
+        if (++st.collected < st.nsectors) {
+            continue;
+        }
+        st.collected = 0;
+        if (frame < st.start_frame) {
+            continue;
+        }
+        if (st.end_frame != 0xFFFFFFFF && st.end_frame != 0 &&
+            frame > st.end_frame) {
+            st.active = 0;
+            if (st.on_end) {
+                st.on_end();
+            }
+            return 0;
+        }
+        st.header.id = st_u16(user);
+        st.header.type = st_u16(user + 2);
+        st.header.secCount = index;
+        st.header.nSectors = count;
+        st.header.frameCount = frame;
+        st.header.frameSize = st_u32(user + 12);
+        st.header.width = st_u16(user + 16);
+        st.header.height = st_u16(user + 18);
+        st.header.dummy1 = st_u32(user + 20);
+        st.header.dummy2 = st_u32(user + 24);
+        CdIntToPos(st.next_sector - 1, &st.header.loc);
+        return 1;
+    }
+    return 0;
+}
+
 static int need_cdda_rewind = 1;
 // play on CDDA mode only (not XA)
 static void psyz_play() {
@@ -833,6 +976,7 @@ static void psyz_xa_read(void) {
 }
 
 static void psyz_stop() {
+    st_stop();
     need_cdda_rewind = 1;
     Psyz_AudioLock();
     is_playing = 0;
@@ -846,6 +990,7 @@ static void psyz_stop() {
 }
 
 static void psyz_pause() {
+    st_stop();
     Psyz_AudioLock();
     is_playing = 0;
     xa.active = 0;
@@ -1235,9 +1380,23 @@ int CdRead(int sectors, u_long* buf, int mode) {
     return 1;
 }
 
+// CdRead2: start a CdlModeStream read at CD_pos for the St* calls below,
+// with any XA audio in it (CdlModeRT) played as psyz_xa_read plays it.
 int CdRead2(long mode) {
-    NOT_IMPLEMENTED;
-    return 0;
+    if (!is_disk_loaded) {
+        return 0;
+    }
+    Psyz_AudioLock();
+    CD_mode = (u_char)mode;
+    Psyz_AudioUnlock();
+    if (mode & CdlModeRT) {
+        Psyz_AudioInit();
+        psyz_xa_read();
+    }
+    if (mode & CdlModeStream) {
+        st_start(CdPosToInt(&CD_pos), (mode & CdlModeSpeed) ? 150 : 75);
+    }
+    return 1;
 }
 
 int CdReadSync(int mode, u_char* result) {
@@ -1248,19 +1407,50 @@ int CdReadSync(int mode, u_char* result) {
     return 0;
 }
 
+// Returns 0 with the next frame's data in *addr and its sector header in
+// *header, or 1 when no whole frame has been read yet.
 u_long StGetNext(u_long** addr, u_long** header) {
-    NOT_IMPLEMENTED;
+    if (!st_next_frame()) {
+        return 1;
+    }
+    st.held = 1;
+    *addr = (u_long*)st.frame;
+    *header = (u_long*)&st.header;
+    if (st.on_frame) {
+        st.on_frame();
+    }
     return 0;
 }
 
-void StSetRing(u_long* ring_addr, u_long ring_size) { NOT_IMPLEMENTED; }
+// The ring is the console's DMA target; psyz assembles frames in its own
+// buffer, so it only needs to know that a ring was set.
+void StSetRing(u_long* ring_addr, u_long ring_size) {
+    (void)ring_addr;
+    (void)ring_size;
+    st_stop();
+}
 
 void StSetStream(u_long mode, u_long start_frame, u_long end_frame,
                  void (*func1)(), void (*func2)()) {
-    NOT_IMPLEMENTED;
+    if (mode != 0) {
+        LOG_ONCE("StSetStream: mode %lu (24-bit) is treated as 0",
+                 (unsigned long)mode);
+    }
+    st.start_frame = (u32)start_frame;
+    st.end_frame = (u32)end_frame;
+    st.on_frame = func1;
+    st.on_end = func2;
 }
 
 u_long StFreeRing(u_long* base) {
-    NOT_IMPLEMENTED;
+    (void)base;
+    st.held = 0;
     return 0;
 }
+
+void StClearRing(void) {
+    st.held = 0;
+    st.collected = 0;
+}
+
+void StUnSetRing(void) { st_stop(); }
