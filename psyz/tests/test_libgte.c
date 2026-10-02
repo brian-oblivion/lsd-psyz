@@ -1775,6 +1775,39 @@ static void RtpsWithDepth(int dqb, DepthResult* r) {
     gte_stflg(&r->flag);
 }
 
+// The depth cue of a vertex whose screen Z is 16 times H (H/SZ = 0x1000
+// in the GTE's 16.16 division), after InitGeom: DQB is 0x1400000 there, so
+// IR0 = (0x1400000 + DQA * 0x1000) >> 12 = 926 with DQA -4194.
+ZTEST(gte, init_geom_depth_cue) {
+    SVECTOR v = {0, 0, 15000};
+    DepthResult r;
+    InitGeom();
+    SetupProjection();
+    gte_ldv0(&v);
+    gte_rtps();
+    GTE_READ_IR0(r.ir0);
+    gte_stflg(&r.flag);
+    zexpect_s32_ge(925, r.ir0);
+    zexpect_s32_le(927, r.ir0);
+    zexpect_u32_eq(0, (unsigned int)r.flag & 0x1000);
+}
+
+// SetFogNear(a, h): no cue at z = a, a quarter of the way at z = 2a
+// (IR0 = (0x1400000 - 320 * 0x8000) >> 12 = 2560).
+ZTEST(gte, set_fog_near) {
+    SVECTOR v = {0, 0, 1000};
+    DepthResult r;
+    SetupProjection();
+    SetFogNear(1000, 1000);
+    gte_ldv0(&v);
+    gte_rtps();
+    GTE_READ_IR0(r.ir0);
+    gte_stflg(&r.flag);
+    zexpect_s32_ge(2559, r.ir0);
+    zexpect_s32_le(2560, r.ir0);
+    zexpect_u32_eq(0, (unsigned int)r.flag & 0x1000);
+}
+
 ZTEST(gte, rtps_ir0_flags_fraction_above_limit) {
     DepthResult r;
     RtpsWithDepth(0x1000001, &r);
