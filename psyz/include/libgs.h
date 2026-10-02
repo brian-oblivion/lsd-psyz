@@ -179,8 +179,8 @@ typedef struct {
  * together to create a BG.
  */
 typedef struct {
-    u_short u;     /**< Offset (X-direction) within the page */
-    u_short v;     /**< Offset (Y-direction) within the page */
+    u_char u;      /**< Offset (X-direction) within the page */
+    u_char v;      /**< Offset (Y-direction) within the page */
     u_short cba;   /**< CLUT ID */
     u_short flag;  /**< Drawing options (flip flags) */
     u_short tpage; /**< Texture page number */
