@@ -103,3 +103,175 @@ ZTEST(gs, draw_offset_follows_buffer) {
     zexpect_u16_eq(red, gs_read_pixel(23, 263));
     zexpect_u16_eq(0, gs_read_pixel(8, 8));
 }
+
+// 320x240: GsIDMATRIX2 is the identity, no aspect correction
+ZTEST_SETUP(gs3d) {
+    ResetGraph(0);
+    GsInitGraph(320, 240, GsNONINTER | GsOFSGPU, 0, 0);
+}
+
+// 4096 * 1000 / |1000|, through SquareRoot0's table, as libgs computes it
+static int gs_unit_1000(void) { return 4096000 / SquareRoot0(1000 * 1000); }
+
+// A mapped TMD holds addresses in 32-bit words: only where data addresses
+// fit, as on the console and 32-bit hosts.
+static int gs_tmd_mappable(const void* p) {
+    return (uintptr_t)p == (u32)(uintptr_t)p;
+}
+
+// A TMD's object table: offsets become addresses, once (flag bit 0).
+ZTEST(gs3d, map_modeling_data_relocates_once) {
+    static u32 tmd[2 + 7];
+    u32 table = (u32)(uintptr_t)&tmd[2];
+    if (!gs_tmd_mappable(tmd)) {
+        zskip("data above 4 GB");
+    }
+    memset(tmd, 0, sizeof(tmd));
+    tmd[1] = 1;              // one object
+    tmd[2 + 0] = 0x100;      // vertices
+    tmd[2 + 2] = 0x200;      // normals
+    tmd[2 + 4] = 0x300;      // primitives
+    tmd[2 + 5] = 7;          // primitive count, untouched
+    GsMapModelingData((u_long*)tmd);
+    zexpect_u32_eq(1, tmd[0]);
+    zexpect_u32_eq(table + 0x100, tmd[2 + 0]);
+    zexpect_u32_eq(table + 0x200, tmd[2 + 2]);
+    zexpect_u32_eq(table + 0x300, tmd[2 + 4]);
+    zexpect_u32_eq(7, tmd[2 + 5]);
+    GsMapModelingData((u_long*)tmd);
+    zexpect_u32_eq(table + 0x100, tmd[2 + 0]);
+}
+
+// Runs of one primitive mode: the first of each run gets the run's length
+// in its first halfword. F3 is 0x10 bytes, GT4 0x24.
+ZTEST(gs3d, link_object4_counts_mode_runs) {
+    static u32 prims[(0x10 * 3 + 0x24) / 4];
+    static u32 obj[7];
+    GsDOBJ2 dobj;
+    u8* p = (u8*)prims;
+    if (!gs_tmd_mappable(prims)) {
+        zskip("data above 4 GB");
+    }
+    memset(prims, 0, sizeof(prims));
+    p[0x00 + 3] = 0x20;
+    p[0x10 + 3] = 0x20;
+    p[0x20 + 3] = 0x3C;
+    p[0x44 + 3] = 0x20;
+    memset(obj, 0, sizeof(obj));
+    obj[4] = (u32)(uintptr_t)prims;
+    obj[5] = 4;
+    GsLinkObject4((u_long)(uintptr_t)obj - 7 * 4, &dobj, 1);
+    zexpect_ptr_eq(obj, dobj.tmd);
+    zexpect_u16_eq(2, *(u16*)(p + 0x00));
+    zexpect_u16_eq(0, *(u16*)(p + 0x10));
+    zexpect_u16_eq(1, *(u16*)(p + 0x20));
+    zexpect_u16_eq(1, *(u16*)(p + 0x44));
+}
+
+// Viewpoint 1000 behind the origin on -z, looking at it: the world
+// rotation is the identity, but for SquareRoot0's rounding, and the origin
+// is 1000 in front.
+static void gs_view_from_minus_z(int rz) {
+    GsRVIEW2 view = {0};
+    view.vpz = -1000;
+    view.rz = rz;
+    zassert_s32_eq(0, GsSetRefView2(&view));
+}
+
+ZTEST(gs3d, ref_view_from_minus_z) {
+    const int k = gs_unit_1000();
+    gs_view_from_minus_z(0);
+    zexpect_s16_eq(k, GsWSMATRIX.m[0][0]);
+    zexpect_s16_eq(4096, GsWSMATRIX.m[1][1]);
+    zexpect_s16_eq(k, GsWSMATRIX.m[2][2]);
+    zexpect_s16_eq(0, GsWSMATRIX.m[0][2]);
+    zexpect_s32_eq(0, GsWSMATRIX.t[0]);
+    zexpect_s32_eq(0, GsWSMATRIX.t[1]);
+    zexpect_s32_eq(1000 * k >> 12, GsWSMATRIX.t[2]);
+}
+
+// Looking down +x: world x becomes view z.
+ZTEST(gs3d, ref_view_along_x) {
+    GsRVIEW2 view = {0};
+    view.vrx = 1000;
+    zassert_s32_eq(0, GsSetRefView2(&view));
+    zexpect_s16_eq(0, GsWSMATRIX.m[0][0]);
+    zexpect_s16_eq(-gs_unit_1000(), GsWSMATRIX.m[0][2]);
+    zexpect_s16_eq(4096, GsWSMATRIX.m[1][1]);
+    zexpect_s16_eq(gs_unit_1000(), GsWSMATRIX.m[2][0]);
+    zexpect_s16_eq(0, GsWSMATRIX.m[2][2]);
+}
+
+// rz, in 4096ths of a degree, twists the view about its z axis.
+ZTEST(gs3d, ref_view_twist) {
+    gs_view_from_minus_z(90 * 4096);
+    zexpect_s16_eq(0, GsWSMATRIX.m[0][0]);
+    zexpect_s16_eq(4096, GsWSMATRIX.m[0][1]);
+    zexpect_s16_eq(-gs_unit_1000(), GsWSMATRIX.m[1][0]);
+    zexpect_s16_eq(0, GsWSMATRIX.m[1][1]);
+}
+
+ZTEST(gs3d, ref_view_needs_two_points) {
+    GsRVIEW2 view = {0};
+    zexpect_s32_eq(1, GsSetRefView2(&view));
+}
+
+// A child's local-to-world matrix includes its parent's, and both cache it
+// for the frame; a child marked changed (flg 0) is recomputed.
+ZTEST(gs3d, coordinate_chain) {
+    GsCOORDINATE2 root, child;
+    MATRIX lw, ls;
+    GsInitCoordinate2(NULL, &root);
+    GsInitCoordinate2(&root, &child);
+    zexpect_ptr_eq(&child, root.sub);
+    zexpect_ptr_eq(&root, child.super);
+    root.coord.t[0] = 100;
+    child.coord.t[1] = 50;
+    GsGetLw(&child, &lw);
+    zexpect_s32_eq(100, lw.t[0]);
+    zexpect_s32_eq(50, lw.t[1]);
+    zexpect_s16_eq(4096, lw.m[1][1]);
+    zexpect_u32_eq(root.flg, child.flg);
+    zexpect_s32_ne(0, child.flg);
+    zexpect_s32_eq(50, child.workm.t[1]);
+
+    child.coord.t[1] = 60;
+    GsGetLw(&child, &lw);
+    zprintf("cached this frame: the change is not seen\n");
+    zexpect_s32_eq(50, lw.t[1]);
+    child.flg = 0;
+    GsGetLw(&child, &lw);
+    zexpect_s32_eq(60, lw.t[1]);
+
+    gs_view_from_minus_z(0);
+    child.flg = 0;
+    GsGetLws(&child, &lw, &ls);
+    zexpect_s32_eq(100 * gs_unit_1000() >> 12, ls.t[0]);
+    zexpect_s32_eq(60, ls.t[1]);
+    zexpect_s32_eq(GsWSMATRIX.t[2], ls.t[2]);
+    zexpect_s32_eq(0, lw.t[2]);
+    child.flg = 0;
+    GsGetLs(&child, &ls);
+    zexpect_s32_eq(GsWSMATRIX.t[2], ls.t[2]);
+}
+
+// Light 0 shining down +z: its row of GsLIGHTWSMATRIX points back at the
+// light, its colour column is the colour over 255 in 4096ths.
+ZTEST(gs3d, flat_light) {
+    GsF_LIGHT light = {0, 0, 1000, 255, 128, 0};
+    GsF_LIGHT none = {0, 0, 0, 255, 255, 255};
+    zexpect_s32_eq(0, GsSetFlatLight(0, &light));
+    zexpect_s16_eq(0, GsLIGHTWSMATRIX.m[0][0]);
+    zexpect_s16_eq(-gs_unit_1000(), GsLIGHTWSMATRIX.m[0][2]);
+    zexpect_s16_eq(0, GsLIGHTWSMATRIX.m[1][2]);
+    zexpect_s32_eq(-1, GsSetFlatLight(1, &none));
+    zexpect_s16_eq(0, GsLIGHTWSMATRIX.m[1][2]);
+}
+
+ZTEST(gs3d, light_mode_range) {
+    GsSetLightMode(2);
+    zexpect_s32_eq(2, GsLIGHT_MODE);
+    GsSetLightMode(4);
+    zexpect_s32_eq(2, GsLIGHT_MODE);
+    GsSetLightMode(0);
+}

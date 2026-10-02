@@ -588,6 +588,10 @@ struct TMD_STRUCT {
 /* Globals */
 
 extern MATRIX GsIDMATRIX;      /**< Identity matrix, translation zero */
+extern MATRIX GsIDMATRIX2;     /**< GsIDMATRIX with the aspect in m[1][1] */
+extern MATRIX GsWSMATRIX;      /**< World to screen (GsSetRefView2) */
+extern MATRIX GsWSMATRIX_ORG;  /**< GsWSMATRIX as GsSetRefView2 left it */
+extern MATRIX GsLIGHTWSMATRIX; /**< Flat light directions (GsSetFlatLight) */
 extern PACKET* GsOUT_PACKET_P; /**< Packet work area (GsSetWorkBase) */
 extern int GsLIGHT_MODE;       /**< Lighting mode (GsSetLightMode) */
 
