@@ -28,6 +28,7 @@ set(PSYZ_SOURCES
     src/platform/psyz.c
     src/psyz/dma.c
     src/psyz/libapi.c
+    src/psyz/libc.c
     src/psyz/libetc.c
     src/psyz/libgpu.c
     ../decomp/src/libcard/card.c

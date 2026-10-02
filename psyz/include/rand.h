@@ -1,9 +1,20 @@
 #ifndef RAND_H
 #define RAND_H
 
-#define RAND_MAX 0x7FFF /**< Maximum value for rand() (32767) */
-
+#ifdef __psyz
+// The host C library has its own rand(), RAND_MAX and srand(), with a
+// different generator and range. Games get the PlayStation's under psyz_
+// names, so that their random sequences match the console's.
+#include <stdlib.h>
+#include <psyz/types.h>
+#undef RAND_MAX
+#define rand psyz_rand
+#define srand psyz_srand
+#else
 typedef unsigned long u_long;
+#endif
+
+#define RAND_MAX 0x7FFF /**< Maximum value for rand() (32767) */
 
 /**
  * @brief Generate a random number
@@ -21,6 +32,6 @@ int rand(void);
  *
  * @param seed Random number seed
  */
-void srand(u_long seed);
+void srand(unsigned int seed);
 
 #endif
