@@ -1206,6 +1206,14 @@ void SetGeomOffset(long ofx, long ofy) {
 
 void SetGeomScreen(long h) { H = h; }
 
+long ReadGeomScreen(void) { return H; }
+
+// In pixels, as SetGeomOffset takes them.
+void ReadGeomOffset(int* x, int* y) {
+    *x = OFX;
+    *y = OFY;
+}
+
 void SetRotMatrix(MATRIX* m) {
     M.m[0][0] = m->m[0][0];
     M.m[0][1] = m->m[0][1];
