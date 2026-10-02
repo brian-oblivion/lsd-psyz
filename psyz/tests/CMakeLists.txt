@@ -9,6 +9,7 @@ set(PSYZ_TEST_SOURCES
     test_libapi.c
     test_libgte.c
     test_libgpu.c
+    test_libgs.c
     test_libcd.c
     test_libspu.c
     frontbuffer_psyz.c
