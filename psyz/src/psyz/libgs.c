@@ -5,14 +5,17 @@
 #include <libetc.h>
 #include <psyz/log.h>
 
-static TILE tile_bg_clear[2];
+// GsSortClear's primitives: a block fill, as PSY-Q uses (SetBlockFill), so
+// the clear ignores the drawing offset and clip
+static BLK_FILL tile_bg_clear[2];
 static int HWD0;
 static int VWD0;
 static short GsORGOFSX;
 static short GsORGOFSY;
 static short PSDIDX;
 static short PSDGPU;
-static short CLIP2;
+static RECT CLIP2;
+static DVECTOR POSITION;
 static short PSDCNT;
 static short PSDOFSX[2];
 static short PSDOFSY[2];
@@ -91,13 +94,16 @@ void GsInitGraph(unsigned short x, unsigned short y, unsigned short intmode,
     PSDBASEY[0] = 0;
     PSDBASEY[1] = 0;
     // TODO other missing inits
-    CLIP2 = 0;
+    POSITION.vx = 0;
+    POSITION.vy = 0;
+    CLIP2.x = 0;
+    CLIP2.y = 0;
+    CLIP2.w = (short)x;
+    CLIP2.h = (short)y;
     setlen(&tile_bg_clear[0], 3);
-    setTile(&tile_bg_clear[0]);
-    // tile_bg_clear[0].code = 2;
+    setcode(&tile_bg_clear[0], 0x02);
     setlen(&tile_bg_clear[1], 3);
-    setTile(&tile_bg_clear[1]);
-    // tile_bg_clear[1].code = 2;
+    setcode(&tile_bg_clear[1], 0x02);
     PSDCNT = 1;
     // TODO other missing inits
 
@@ -109,7 +115,7 @@ void GsDefDispBuff(unsigned short x0, unsigned short y0, unsigned short x1,
     PSDOFSX[0] = (short)x0;
     PSDOFSX[1] = (short)x1;
     PSDOFSY[0] = (short)y0;
-    PSDOFSY[1] = (short)y0;
+    PSDOFSY[1] = (short)y1;
     if (PSDGPU) {
         PSDBASEX[0] = 0;
         PSDBASEX[1] = 0;
@@ -159,6 +165,29 @@ void GsSortClear(unsigned char r, unsigned char g, unsigned char b, GsOT* ot) {
 
 void GsDrawOt(GsOT* ot) { DrawOTag((OT_TYPE*)ot->tag); }
 
-void GsSetDrawBuffClip(void) { NOT_IMPLEMENTED; }
+void GsSetDrawBuffClip(void) {
+    GsDRAWENV.clip.x = CLIP2.x + PSDOFSX[PSDIDX];
+    GsDRAWENV.clip.y = CLIP2.y + PSDOFSY[PSDIDX];
+    GsDRAWENV.clip.w = CLIP2.w;
+    GsDRAWENV.clip.h = CLIP2.h;
+    PutDrawEnv(&GsDRAWENV);
+}
 
-void GsSetDrawBuffOffset(void) { NOT_IMPLEMENTED; }
+void GsSetDrawBuffOffset(void) {
+    if (PSDGPU) {
+        // GsOFSGPU: the GPU adds the draw buffer's offset to every vertex
+        GsDRAWENV.ofs[0] = POSITION.vx + PSDOFSX[PSDIDX];
+        GsDRAWENV.ofs[1] = POSITION.vy + PSDOFSY[PSDIDX];
+        GsORGOFSX = 0;
+        GsORGOFSY = 0;
+        PutDrawEnv(&GsDRAWENV);
+    } else {
+        // GsOFSGTE: the offset goes into the GTE instead; PSY-Q reads the
+        // other buffer's offset here
+        short x = POSITION.vx + PSDOFSX[PSDIDX == 0];
+        short y = POSITION.vy + PSDOFSY[PSDIDX == 0];
+        SetGeomOffset(x, y);
+        GsORGOFSX = x;
+        GsORGOFSY = y;
+    }
+}
