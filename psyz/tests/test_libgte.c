@@ -1782,3 +1782,277 @@ ZTEST(gte, rtps_ir0_flags_fraction_above_limit) {
     zexpect_s32_eq(0x1000001, r.mac0);
     zexpect_u32_eq(0x00001000, (unsigned int)r.flag);
 }
+
+// RCpoly*: SetupProjection maps a local vertex (x, y, 0) to screen
+// (160 + x, 120 + y) at sz 1000, so every midpoint lands on an exact pixel.
+// The clip window is the 320x240 screen centred on the offset.
+static u_long div_packets[1024];
+
+static void DivVertex(RVECTOR* r, short x, short y, u_char u, u_char v,
+                      u_char cr, u_char cg, u_char cb) {
+    memset(r, 0, sizeof(*r));
+    r->v.vx = x;
+    r->v.vy = y;
+    r->uv[0] = u;
+    r->uv[1] = v;
+    r->c.r = cr;
+    r->c.g = cg;
+    r->c.b = cb;
+    r->sxy.vx = (short)(160 + x);
+    r->sxy.vy = (short)(120 + y);
+    r->sz = 1000;
+}
+
+// The flat triangle (-100,-100), (100,-100), (-100,100).
+static DIVPOLYGON3* DivSetupF3(OT_TYPE* ot, u_long ndiv) {
+    static DIVPOLYGON3 d;
+    memset(&d, 0, sizeof(d));
+    SetupProjection();
+    termPrim(ot);
+    d.ndiv = ndiv;
+    d.pih = 320;
+    d.piv = 240;
+    d.rgbc.r = 0x11;
+    d.rgbc.g = 0x22;
+    d.rgbc.b = 0x33;
+    d.rgbc.cd = 0x20;
+    d.ot = (u_long*)ot;
+    DivVertex(&d.r0, -100, -100, 0, 0, 0, 0, 0);
+    DivVertex(&d.r1, 100, -100, 0, 0, 0, 0, 0);
+    DivVertex(&d.r2, -100, 100, 0, 0, 0, 0, 0);
+    d.cr[0].r0 = &d.r0;
+    d.cr[0].r1 = &d.r1;
+    d.cr[0].r2 = &d.r2;
+    return &d;
+}
+
+// The square (-100,-100)..(100,100) in GPU corner order, UV 0..63 and red,
+// green, blue, white corners.
+static DIVPOLYGON4* DivSetup4(OT_TYPE* ot, u_long ndiv, u_char code) {
+    static DIVPOLYGON4 d;
+    memset(&d, 0, sizeof(d));
+    SetupProjection();
+    termPrim(ot);
+    d.ndiv = ndiv;
+    d.pih = 320;
+    d.piv = 240;
+    d.clut = 0x1234;
+    d.tpage = 0x0025;
+    d.rgbc.r = 0x80;
+    d.rgbc.g = 0x80;
+    d.rgbc.b = 0x80;
+    d.rgbc.cd = code;
+    d.ot = (u_long*)ot;
+    DivVertex(&d.r0, -100, -100, 0, 0, 255, 0, 0);
+    DivVertex(&d.r1, 100, -100, 63, 0, 0, 255, 0);
+    DivVertex(&d.r2, -100, 100, 0, 63, 0, 0, 255);
+    DivVertex(&d.r3, 100, 100, 63, 63, 255, 255, 255);
+    d.cr[0].r0 = &d.r0;
+    d.cr[0].r1 = &d.r1;
+    d.cr[0].r2 = &d.r2;
+    d.cr[0].r3 = &d.r3;
+    return &d;
+}
+
+// Walks the OT entry and checks it holds exactly `n` primitives of `size`
+// bytes laid out back to back from div_packets, newest (last emitted) first,
+// each with the given length and code.
+#define DivCheckChain(ot, n, size, len, code)                                  \
+    DivCheckChain_(__LINE__, ot, n, size, len, code)
+static void DivCheckChain_(
+    int line, OT_TYPE* ot, int n, size_t size, int len, int code) {
+    P_TAG* t = (P_TAG*)ot;
+    int i = 0;
+    while (!isendprim(t) && i <= n) {
+        t = (P_TAG*)nextPrim(t);
+        i++;
+        if (i <= n &&
+            (u_char*)t != (u_char*)div_packets + (size_t)(n - i) * size) {
+            ztest__fail(line, 0, "OT link out of order");
+            zprintf("  link %d: expected packet %d\n", i, n - i);
+            return;
+        }
+        if (i <= n && (getlen(t) != len || getcode(t) != code)) {
+            ztest__fail(line, 0, "bad primitive tag");
+            zprintf("  packet %d: len %d code %02X\n", n - i, getlen(t),
+                    getcode(t));
+            return;
+        }
+    }
+    if (i != n) {
+        ztest__fail(line, 0, "wrong primitive count");
+        zprintf("  expected %d, got %d\n", n, i);
+    }
+}
+
+#define DivCheckXY3(p, X0, Y0, X1, Y1, X2, Y2)                                 \
+    do {                                                                       \
+        zexpect_s16_eq(X0, (p)->x0);                                           \
+        zexpect_s16_eq(Y0, (p)->y0);                                           \
+        zexpect_s16_eq(X1, (p)->x1);                                           \
+        zexpect_s16_eq(Y1, (p)->y1);                                           \
+        zexpect_s16_eq(X2, (p)->x2);                                           \
+        zexpect_s16_eq(Y2, (p)->y2);                                           \
+    } while (0)
+
+#define DivCheckXY4(p, X0, Y0, X1, Y1, X2, Y2, X3, Y3)                         \
+    do {                                                                       \
+        DivCheckXY3(p, X0, Y0, X1, Y1, X2, Y2);                                \
+        zexpect_s16_eq(X3, (p)->x3);                                           \
+        zexpect_s16_eq(Y3, (p)->y3);                                           \
+    } while (0)
+
+#define DivCheckUV4(p, U0, V0, U1, V1, U2, V2, U3, V3)                         \
+    do {                                                                       \
+        zexpect_u8_eq(U0, (p)->u0);                                            \
+        zexpect_u8_eq(V0, (p)->v0);                                            \
+        zexpect_u8_eq(U1, (p)->u1);                                            \
+        zexpect_u8_eq(V1, (p)->v1);                                            \
+        zexpect_u8_eq(U2, (p)->u2);                                            \
+        zexpect_u8_eq(V2, (p)->v2);                                            \
+        zexpect_u8_eq(U3, (p)->u3);                                            \
+        zexpect_u8_eq(V3, (p)->v3);                                            \
+    } while (0)
+
+#define DivCheckRGB(p, N, R, G, B)                                             \
+    do {                                                                       \
+        zexpect_u8_eq(R, (p)->r##N);                                           \
+        zexpect_u8_eq(G, (p)->g##N);                                           \
+        zexpect_u8_eq(B, (p)->b##N);                                           \
+    } while (0)
+
+ZTEST(gte, rcpoly_f3_ndiv1) {
+    OT_TYPE ot;
+    DIVPOLYGON3* d = DivSetupF3(&ot, 1);
+    POLY_F3* p = (POLY_F3*)div_packets;
+    u_long* end = RCpolyF3(div_packets, d);
+    zexpect_s32_eq(4 * sizeof(POLY_F3), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 4, sizeof(POLY_F3), 4, 0x20);
+    DivCheckXY3(&p[0], 260, 20, 160, 120, 160, 20);
+    DivCheckXY3(&p[1], 160, 20, 160, 120, 60, 120);
+    DivCheckXY3(&p[2], 60, 20, 160, 20, 60, 120);
+    DivCheckXY3(&p[3], 60, 220, 60, 120, 160, 120);
+    DivCheckRGB(&p[2], 0, 0x11, 0x22, 0x33);
+}
+
+ZTEST(gte, rcpoly_f3_ndiv2) {
+    OT_TYPE ot;
+    DIVPOLYGON3* d = DivSetupF3(&ot, 2);
+    POLY_F3* p = (POLY_F3*)div_packets;
+    u_long* end = RCpolyF3(div_packets, d);
+    zexpect_s32_eq(16 * sizeof(POLY_F3), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 16, sizeof(POLY_F3), 4, 0x20);
+    // first: the r0 corner's first sub-triangle; last: the centre's last
+    DivCheckXY3(&p[0], 160, 20, 110, 70, 110, 20);
+    DivCheckXY3(&p[15], 60, 120, 110, 70, 110, 120);
+}
+
+ZTEST(gte, rcpoly_f3_culls_offscreen_subtriangle) {
+    OT_TYPE ot;
+    DIVPOLYGON3* d = DivSetupF3(&ot, 2);
+    POLY_F3* p = (POLY_F3*)div_packets;
+    u_long* end;
+    // r0 far left: the r0 corner's quarter lies wholly left of x = 0
+    DivVertex(&d->r0, -600, -100, 0, 0, 0, 0, 0);
+    DivVertex(&d->r2, 100, 100, 0, 0, 0, 0, 0);
+    end = RCpolyF3(div_packets, d);
+    zexpect_s32_eq(12 * sizeof(POLY_F3), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 12, sizeof(POLY_F3), 4, 0x20);
+    DivCheckXY3(&p[0], 260, 120, 85, 70, 260, 70);
+}
+
+ZTEST(gte, rcpoly_f3_rejects_whole_polygon) {
+    OT_TYPE ot;
+    DIVPOLYGON3* d = DivSetupF3(&ot, 1);
+    // every corner nearer than H / 2
+    d->r0.sz = d->r1.sz = d->r2.sz = 499;
+    zexpect_s32_eq(0, (u_char*)RCpolyF3(div_packets, d) - (u_char*)div_packets);
+    DivCheckChain(&ot, 0, sizeof(POLY_F3), 4, 0x20);
+    // one corner at H / 2 is enough to keep it
+    d->r1.sz = 500;
+    zexpect_s32_eq(4 * sizeof(POLY_F3),
+                   (u_char*)RCpolyF3(div_packets, d) - (u_char*)div_packets);
+    // every corner below the window
+    d = DivSetupF3(&ot, 1);
+    d->r0.sxy.vy = d->r1.sxy.vy = d->r2.sxy.vy = 241;
+    zexpect_s32_eq(0, (u_char*)RCpolyF3(div_packets, d) - (u_char*)div_packets);
+    DivCheckChain(&ot, 0, sizeof(POLY_F3), 4, 0x20);
+}
+
+ZTEST(gte, rcpoly_ft4_ndiv1) {
+    OT_TYPE ot;
+    DIVPOLYGON4* d = DivSetup4(&ot, 1, 0x2c);
+    POLY_FT4* p = (POLY_FT4*)div_packets;
+    u_long* end = RCpolyFT4(div_packets, d);
+    int i;
+    zexpect_s32_eq(4 * sizeof(POLY_FT4), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 4, sizeof(POLY_FT4), 9, 0x2c);
+    DivCheckXY4(&p[0], 60, 20, 160, 20, 60, 120, 160, 120);
+    DivCheckUV4(&p[0], 0, 0, 31, 0, 0, 31, 31, 31);
+    DivCheckXY4(&p[1], 260, 20, 260, 120, 160, 20, 160, 120);
+    DivCheckUV4(&p[1], 63, 0, 63, 31, 31, 0, 31, 31);
+    DivCheckXY4(&p[2], 60, 220, 60, 120, 160, 220, 160, 120);
+    DivCheckXY4(&p[3], 260, 220, 160, 220, 260, 120, 160, 120);
+    DivCheckUV4(&p[3], 63, 63, 31, 63, 63, 31, 31, 31);
+    for (i = 0; i < 4; i++) {
+        zexpect_u16_eq(0x1234, p[i].clut);
+        zexpect_u16_eq(0x0025, p[i].tpage);
+        DivCheckRGB(&p[i], 0, 0x80, 0x80, 0x80);
+    }
+}
+
+ZTEST(gte, rcpoly_ft4_ndiv2) {
+    OT_TYPE ot;
+    DIVPOLYGON4* d = DivSetup4(&ot, 2, 0x2c);
+    POLY_FT4* p = (POLY_FT4*)div_packets;
+    u_long* end = RCpolyFT4(div_packets, d);
+    zexpect_s32_eq(16 * sizeof(POLY_FT4), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 16, sizeof(POLY_FT4), 9, 0x2c);
+    DivCheckXY4(&p[0], 60, 20, 110, 20, 60, 70, 110, 70);
+    DivCheckUV4(&p[0], 0, 0, 15, 0, 0, 15, 15, 15);
+    zexpect_u16_eq(0x1234, p[15].clut);
+    zexpect_u16_eq(0x0025, p[15].tpage);
+}
+
+ZTEST(gte, rcpoly_gt4_ndiv1) {
+    OT_TYPE ot;
+    DIVPOLYGON4* d = DivSetup4(&ot, 1, 0x3c);
+    POLY_GT4* p = (POLY_GT4*)div_packets;
+    u_long* end = RCpolyGT4(div_packets, d);
+    zexpect_s32_eq(4 * sizeof(POLY_GT4), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 4, sizeof(POLY_GT4), 12, 0x3c);
+    DivCheckXY4(&p[1], 260, 20, 260, 120, 160, 20, 160, 120);
+    DivCheckUV4(&p[1], 63, 0, 63, 31, 31, 0, 31, 31);
+    DivCheckRGB(&p[1], 0, 0, 255, 0);
+    DivCheckRGB(&p[1], 1, 127, 255, 127);
+    DivCheckRGB(&p[1], 2, 127, 127, 0);
+    DivCheckRGB(&p[1], 3, 127, 127, 127);
+    DivCheckRGB(&p[2], 0, 0, 0, 255);
+    DivCheckRGB(&p[2], 1, 127, 0, 127);
+    DivCheckRGB(&p[2], 2, 127, 127, 255);
+    zexpect_u16_eq(0x1234, p[1].clut);
+    zexpect_u16_eq(0x0025, p[1].tpage);
+}
+
+ZTEST(gte, rcpoly_gt4_ndiv2) {
+    OT_TYPE ot;
+    DIVPOLYGON4* d = DivSetup4(&ot, 2, 0x3c);
+    POLY_GT4* p = (POLY_GT4*)div_packets;
+    u_long* end = RCpolyGT4(div_packets, d);
+    zexpect_s32_eq(16 * sizeof(POLY_GT4), (u_char*)end - (u_char*)div_packets);
+    DivCheckChain(&ot, 16, sizeof(POLY_GT4), 12, 0x3c);
+    // first: the r0 corner of the r0 quarter
+    DivCheckXY4(&p[0], 60, 20, 110, 20, 60, 70, 110, 70);
+    DivCheckUV4(&p[0], 0, 0, 15, 0, 0, 15, 15, 15);
+    DivCheckRGB(&p[0], 0, 255, 0, 0);
+    DivCheckRGB(&p[0], 1, 191, 63, 0);
+    DivCheckRGB(&p[0], 2, 191, 0, 63);
+    DivCheckRGB(&p[0], 3, 159, 63, 63);
+    // last: the centre corner of the r3 quarter
+    DivCheckXY4(&p[15], 160, 120, 210, 120, 160, 170, 210, 170);
+    DivCheckUV4(&p[15], 31, 31, 47, 31, 31, 47, 47, 47);
+    DivCheckRGB(&p[15], 0, 127, 127, 127);
+    DivCheckRGB(&p[15], 1, 127, 191, 127);
+    DivCheckRGB(&p[15], 2, 127, 127, 191);
+    DivCheckRGB(&p[15], 3, 159, 191, 191);
+}
