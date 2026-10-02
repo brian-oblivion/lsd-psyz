@@ -1782,3 +1782,157 @@ ZTEST(gte, rtps_ir0_flags_fraction_above_limit) {
     zexpect_s32_eq(0x1000001, r.mac0);
     zexpect_u32_eq(0x00001000, (unsigned int)r.flag);
 }
+
+// The gte_stsxy3_<prim> family: each stores SXY0-SXY2 into the first three
+// vertices of its primitive and leaves the fields between them alone.
+#define STSXY3_PRIM_TEST(name, type, macro, between)                           \
+    ZTEST(gte, name) {                                                         \
+        SVECTOR v0 = {100, 50, 0}, v1 = {-100, -50, 0}, v2 = {30, -40, 1000};  \
+        type poly;                                                             \
+        memset(&poly, 0xCC, sizeof(poly));                                     \
+        SetupProjection();                                                     \
+        gte_ldv3(&v0, &v1, &v2);                                               \
+        gte_rtpt();                                                            \
+        macro(&poly);                                                          \
+        zexpect_s16_eq(260, poly.x0);                                          \
+        zexpect_s16_eq(170, poly.y0);                                          \
+        zexpect_s16_eq(60, poly.x1);                                           \
+        zexpect_s16_eq(70, poly.y1);                                           \
+        zexpect_s16_eq(175, poly.x2);                                          \
+        zexpect_s16_eq(100, poly.y2);                                          \
+        zexpect_u8_eq(0xCC, poly.between);                                     \
+        zexpect_u8_eq(0xCC, poly.code);                                        \
+    }
+STSXY3_PRIM_TEST(stsxy3_f3_fills_poly_vertices, POLY_F3, gte_stsxy3_f3, r0)
+STSXY3_PRIM_TEST(stsxy3_f4_fills_poly_vertices, POLY_F4, gte_stsxy3_f4, r0)
+STSXY3_PRIM_TEST(stsxy3_ft3_fills_poly_vertices, POLY_FT3, gte_stsxy3_ft3, u0)
+STSXY3_PRIM_TEST(stsxy3_ft4_fills_poly_vertices, POLY_FT4, gte_stsxy3_ft4, u1)
+STSXY3_PRIM_TEST(stsxy3_g4_fills_poly_vertices, POLY_G4, gte_stsxy3_g4, r1)
+STSXY3_PRIM_TEST(stsxy3_gt4_fills_poly_vertices, POLY_GT4, gte_stsxy3_gt4, u1)
+
+ZTEST(gte, stsxy3_f4_leaves_fourth_vertex) {
+    SVECTOR v0 = {100, 50, 0}, v1 = {-100, -50, 0}, v2 = {30, -40, 1000};
+    POLY_F4 poly;
+    memset(&poly, 0xCC, sizeof(poly));
+    SetupProjection();
+    gte_ldv3(&v0, &v1, &v2);
+    gte_rtpt();
+    gte_stsxy3_f4(&poly);
+    zexpect_s16_eq((short)0xCCCC, poly.x3);
+    zexpect_s16_eq((short)0xCCCC, poly.y3);
+}
+
+ZTEST(gte, stsxy2_stores_last_screen_xy) {
+    SVECTOR v0 = {100, 50, 0}, v1 = {-100, -50, 0}, v2 = {30, -40, 1000};
+    int sxy = 0;
+    SetupProjection();
+    gte_ldv3(&v0, &v1, &v2);
+    gte_rtpt();
+    gte_stsxy2(&sxy);
+    zexpect_u32_eq(SXY(175, 100), sxy);
+}
+
+ZTEST(gte, stdp_stores_ir0) {
+    int p = 0;
+    gte_lddp(0x0ABC);
+    gte_stdp(&p);
+    zexpect_s32_eq(0x0ABC, p);
+}
+
+// DPCT depth-cues RGB0-RGB2 one after another, each as DPCS would.
+ZTEST(gte, dpct_cues_three_colors_like_dpcs) {
+    unsigned int in[3] = {
+        RGBCD(40, 80, 120, 0x2C), RGBCD(0, 0, 0, 0x2C),
+        RGBCD(255, 255, 255, 0x2C)};
+    unsigned int out[3] = {0, 0, 0}, single = 0;
+    int i;
+    gte_SetFarColor(200, 100, 50);
+    gte_lddp(0x800);
+    gte_ldrgb3(&in[0], &in[1], &in[2]);
+    gte_dpct();
+    gte_strgb3(&out[0], &out[1], &out[2]);
+    zexpect_u32_eq(RGBCD(120, 90, 85, 0x2C), out[0]);
+    for (i = 0; i < 3; i++) {
+        gte_ldrgb(&in[i]);
+        gte_lddp(0x800);
+        gte_dpcs();
+        gte_strgb(&single);
+        zexpect_u32_eq(single, out[i]);
+    }
+}
+
+// IR1-IR3 set by an identity RTV0, then multiplied by a matrix.
+static void MultiplyIr(SVECTOR* v, MATRIX* light, MATRIX* rot, int useLight,
+                       VECTOR* out) {
+    MATRIX identity = {
+        {{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    gte_SetRotMatrix(&identity);
+    gte_SetTransMatrix(&identity);
+    gte_SetLightMatrix(light);
+    gte_ldv0(v);
+    gte_rtv0();
+    gte_SetRotMatrix(rot);
+    if (useLight) {
+        gte_llir();
+    } else {
+        gte_rtir();
+    }
+    gte_stlvnl(out);
+}
+
+ZTEST(gte, llir_multiplies_ir_by_light_matrix) {
+    MATRIX light = {
+        {{0x1000, 0, 0}, {0, 0x800, 0}, {0, 0, -0x1000}}, {0, 0, 0}};
+    MATRIX rot = {{{0, 0x1000, 0}, {0x1000, 0, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    SVECTOR v = {100, 200, 300};
+    VECTOR out = {0, 0, 0};
+    MultiplyIr(&v, &light, &rot, 1, &out);
+    zexpect_s32_eq(100, out.vx);
+    zexpect_s32_eq(100, out.vy);
+    zexpect_s32_eq(-300, out.vz);
+}
+
+ZTEST(gte, rtir_multiplies_ir_by_rotation_matrix) {
+    MATRIX light = {
+        {{0x1000, 0, 0}, {0, 0x800, 0}, {0, 0, -0x1000}}, {0, 0, 0}};
+    MATRIX rot = {{{0, 0x1000, 0}, {0x1000, 0, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    SVECTOR v = {100, 200, 300};
+    VECTOR out = {0, 0, 0};
+    MultiplyIr(&v, &light, &rot, 0, &out);
+    zexpect_s32_eq(200, out.vx);
+    zexpect_s32_eq(100, out.vy);
+    zexpect_s32_eq(300, out.vz);
+}
+
+// NCDS: light 0.5/0.25/0.125 from the normal, plus the back colour
+// (16, 32, 48), gives 0.5625/0.375/0.3125 of (100, 150, 200), that is
+// (56.25, 56.25, 62.5), then a quarter of the way to the far colour
+// (255, 0, 0): (105.9, 42.2, 46.9), truncated.
+ZTEST(gte, ncds_lights_and_depth_cues_one_vertex) {
+    MATRIX light = {
+        {{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    MATRIX color = {
+        {{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    SVECTOR normal = {0x800, 0x400, 0x200};
+    unsigned int in = RGBCD(100, 150, 200, 0x30), out = 0;
+    gte_SetLightMatrix(&light);
+    gte_SetColorMatrix(&color);
+    gte_SetBackColor(16, 32, 48);
+    gte_SetFarColor(255, 0, 0);
+    gte_ldv0(&normal);
+    gte_ldrgb(&in);
+    gte_lddp(0x400);
+    gte_ncds();
+    gte_strgb(&out);
+    zexpect_u32_eq(RGBCD(105, 42, 46, 0x30), out);
+}
+
+ZTEST(gte, read_rot_matrix_reads_rotation_and_translation) {
+    MATRIX m = {{{1, 2, 3}, {4, 5, 6}, {7, 8, -9}}, {100, -200, 300}};
+    MATRIX out;
+    memset(&out, 0, sizeof(out));
+    gte_SetRotMatrix(&m);
+    gte_SetTransMatrix(&m);
+    gte_ReadRotMatrix(&out);
+    zexpect_s32_eq(0, memcmp(&m, &out, sizeof(m)));
+}

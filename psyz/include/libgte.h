@@ -2187,6 +2187,79 @@ void RotMeshH(short* Yheight, DVECTOR* Vo, u_short* sz, u_short* flag,
         : "r"(r0)                                                              \
         : "memory")
 
+#define gte_dpct()                                                             \
+    __asm__ volatile("nop;"                                                    \
+                     "nop;"                                                    \
+                     ".word 0x4AF8002A")
+
+#define gte_ncds()                                                             \
+    __asm__ volatile("nop;"                                                    \
+                     "nop;"                                                    \
+                     ".word 0x4AE80413")
+
+#define gte_rtir()                                                             \
+    __asm__ volatile("nop;"                                                    \
+                     "nop;"                                                    \
+                     ".word 0x4A49E012")
+
+#define gte_llir()                                                             \
+    __asm__ volatile("nop;"                                                    \
+                     "nop;"                                                    \
+                     ".word 0x4A4BE012")
+
+#define gte_stdp(r0)                                                           \
+    __asm__ volatile("swc2	$8, 0( %0 )" : : "r"(r0) : "memory")
+
+#define gte_stsxy2(r0)                                                         \
+    __asm__ volatile("swc2	$14, 0( %0 )" : : "r"(r0) : "memory")
+
+#define gte_stsxy3_f3(r0)                                                      \
+    __asm__ volatile(                                                          \
+        "swc2	$12, 8( %0 );"                                                   \
+        "swc2	$13, 12( %0 );"                                                  \
+        "swc2	$14, 16( %0 )"                                                   \
+        :                                                                      \
+        : "r"(r0)                                                              \
+        : "memory")
+
+#define gte_stsxy3_ft3(r0)                                                     \
+    __asm__ volatile(                                                          \
+        "swc2	$12, 8( %0 );"                                                   \
+        "swc2	$13, 16( %0 );"                                                  \
+        "swc2	$14, 24( %0 )"                                                   \
+        :                                                                      \
+        : "r"(r0)                                                              \
+        : "memory")
+
+/* The first three vertices of the 4-vertex primitives sit where the
+ * 3-vertex ones put theirs. */
+#define gte_stsxy3_f4(r0) gte_stsxy3_f3(r0)
+#define gte_stsxy3_ft4(r0) gte_stsxy3_ft3(r0)
+#define gte_stsxy3_g4(r0) gte_stsxy3_g3(r0)
+#define gte_stsxy3_gt4(r0) gte_stsxy3_gt3(r0)
+
+#define gte_ReadRotMatrix(r0)                                                  \
+    __asm__ volatile(                                                          \
+        "cfc2	$12, $0;"                                                        \
+        "cfc2	$13, $1;"                                                        \
+        "sw	$12, 0( %0 );"                                                     \
+        "sw	$13, 4( %0 );"                                                     \
+        "cfc2	$12, $2;"                                                        \
+        "cfc2	$13, $3;"                                                        \
+        "cfc2	$14, $4;"                                                        \
+        "sw	$12, 8( %0 );"                                                     \
+        "sw	$13, 12( %0 );"                                                    \
+        "sw	$14, 16( %0 );"                                                    \
+        "cfc2	$12, $5;"                                                        \
+        "cfc2	$13, $6;"                                                        \
+        "cfc2	$14, $7;"                                                        \
+        "sw	$12, 20( %0 );"                                                    \
+        "sw	$13, 24( %0 );"                                                    \
+        "sw	$14, 28( %0 )"                                                     \
+        :                                                                      \
+        : "r"(r0)                                                              \
+        : "$12", "$13", "$14", "memory")
+
 #else // __psyz defined
 #define gte_SetGeomScreen SetGeomScreen
 #define gte_SetRotMatrix SetRotMatrix
@@ -2211,11 +2284,24 @@ void RotMeshH(short* Yheight, DVECTOR* Vo, u_short* sz, u_short* flag,
 #define gte_ldv01c(x) Psyz_GteLdv01c(x)
 #define gte_ldv3c(x) Psyz_GteLdv3c(x)
 #define gte_stsxy01c(x) Psyz_GteStsxy01c((unsigned int*)(x))
+#define gte_stsxy2(x) Psyz_GteStsxy2((unsigned int*)(x))
+#define gte_stsxy3_f3(x) Psyz_GteStsxy3F3((POLY_F3*)(x))
+#define gte_stsxy3_f4(x) Psyz_GteStsxy3F4((POLY_F4*)(x))
+#define gte_stsxy3_ft3(x) Psyz_GteStsxy3Ft3((POLY_FT3*)(x))
+#define gte_stsxy3_ft4(x) Psyz_GteStsxy3Ft4((POLY_FT4*)(x))
 #define gte_stsxy3_g3(x) Psyz_GteStsxy3G3((POLY_G3*)(x))
+#define gte_stsxy3_g4(x) Psyz_GteStsxy3G4((POLY_G4*)(x))
 #define gte_stsxy3_gt3(x) Psyz_GteStsxy3Gt3((POLY_GT3*)(x))
+#define gte_stsxy3_gt4(x) Psyz_GteStsxy3Gt4((POLY_GT4*)(x))
 #define gte_avsz3() Psyz_GteAvsz3()
 #define gte_avsz4() Psyz_GteAvsz4()
 #define gte_dpcs() Psyz_GteDpcs()
+#define gte_dpct() Psyz_GteDpct()
+#define gte_ncds() Psyz_GteNcds()
+#define gte_rtir() Psyz_GteRtir()
+#define gte_llir() Psyz_GteLlir()
+#define gte_stdp(x) Psyz_GteStdp((unsigned int*)(x))
+#define gte_ReadRotMatrix(x) ReadRotMatrix(x)
 #define gte_lcir() Psyz_GteLcir()
 #define gte_ldclmv(x) Psyz_GteLdClmv(x)
 #define gte_ldrgb(x) Psyz_GteLdRgb((CVECTOR*)(x))
