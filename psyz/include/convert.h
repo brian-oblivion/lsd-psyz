@@ -1,6 +1,12 @@
 #ifndef CONVERT_H
 #define CONVERT_H
 
+#ifdef __psyz
+// The host C library declares the same functions with const-qualified
+// parameters, and behaves the same for the strings a game passes.
+#include <stdlib.h>
+#else
+
 /**
  * @brief Convert a string to an integer
  *
@@ -64,5 +70,7 @@ long strtol(char* s, char** endp, unsigned int base);
  * @return The result obtained by converting the input value s to a long
  */
 unsigned long strtoul(char* s, char** endp, int base);
+
+#endif
 
 #endif
