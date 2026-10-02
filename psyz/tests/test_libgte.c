@@ -2471,3 +2471,24 @@ ZTEST(gte, rcpoly_gt4_ndiv2) {
     DivCheckRGB(&p[15], 2, 127, 127, 191);
     DivCheckRGB(&p[15], 3, 159, 191, 191);
 }
+
+// gte_stflg_4 keeps FLAG's bit 18 (SZ3/OTZ saturated) only: the IR0 flag
+// RtpsWithDepth raises is masked off; a vertex past SZ's 16 bits shows.
+ZTEST(gte, stflg_4_keeps_sz_saturation_only) {
+    MATRIX far = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                  {0, 0, 0x20000}};
+    SVECTOR v = {0, 0, 0};
+    DepthResult r;
+    long flag4;
+    RtpsWithDepth(0x1000001, &r);
+    gte_stflg_4(&flag4);
+    zexpect_u32_eq(0x1000, (unsigned int)r.flag);
+    zexpect_s32_eq(0, flag4);
+
+    gte_SetRotMatrix(&far);
+    gte_SetTransMatrix(&far);
+    gte_ldv0(&v);
+    gte_rtps();
+    gte_stflg_4(&flag4);
+    zexpect_s32_eq(0x40000, flag4);
+}

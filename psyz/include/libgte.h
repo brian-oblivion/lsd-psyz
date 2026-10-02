@@ -2160,6 +2160,17 @@ void RotMeshH(short* Yheight, DVECTOR* Vo, u_short* sz, u_short* flag,
         : "r"(r0)                                                              \
         : "$12", "memory")
 
+#define gte_stflg_4(r0)                                                        \
+    __asm__ volatile(                                                          \
+        "cfc2	$12, $31;"                                                       \
+        "addi	$13, $0, 4;"                                                     \
+        "sll	$13, $13, 16;"                                                   \
+        "and	$12, $12, $13;"                                                  \
+        "sw	$12, 0( %0 )"                                                      \
+        :                                                                      \
+        : "r"(r0)                                                              \
+        : "$12", "$13", "memory")
+
 // gte_readflg doesn't technically exist, but FF7 uses it
 #define gte_readflg(r0) __asm__ volatile("cfc2	%0, $31;nop" : "=r"(r0))
 
@@ -2370,6 +2381,8 @@ void RotMeshH(short* Yheight, DVECTOR* Vo, u_short* sz, u_short* flag,
 #define gte_rt() Psyz_GteRt()
 #define gte_stlvnl(x) Psyz_GteStlvnl((VECTOR*)(x))
 #define gte_stflg(x) (*(x) = Psyz_GteReadflg())
+// FLAG's bit 18 alone (SZ3 or OTZ saturated), the rest masked off
+#define gte_stflg_4(x) (*(x) = Psyz_GteReadflg() & 0x40000)
 #define gte_readflg(x) ((x) = Psyz_GteReadflg())
 #define gte_rtv0() Psyz_GteRtv0()
 #define gte_rtv1() Psyz_GteRtv1()
