@@ -35,11 +35,45 @@
 #define GsLMODE_LOFF 2       /**< Light source calculation off */
 #define GsLMODE_NORMAL_FOG 3 /**< Normal + fog */
 
-/* Attribute bit masks */
-#define GsDOFF (1 << 31) /**< Display off */
-#define GsAON (1 << 30)  /**< Semi-transparency on */
-#define GsLLMOD (1 << 5) /**< Local lighting mode */
-#define GsLOFF (1 << 6)  /**< Light off */
+/* Attribute bit masks (GsDOBJ2, GsSPRITE, GsBG, ... attribute) */
+#define GsFOG (1 << 3)     /**< Fog on (3D objects) */
+#define GsMATE (1 << 4)    /**< Material colour on (3D objects) */
+#define GsLLMOD (1 << 5)   /**< Local lighting mode */
+#define GsLOFF (1 << 6)    /**< Light off */
+#define GsDIV1 (1 << 9)    /**< Subdivide polygons 2x2 */
+#define GsDIV2 (2 << 9)    /**< Subdivide polygons 4x4 */
+#define GsDIV3 (3 << 9)    /**< Subdivide polygons 8x8 */
+#define GsDIV4 (4 << 9)    /**< Subdivide polygons 16x16 */
+#define GsDIV5 (5 << 9)    /**< Subdivide polygons 32x32 */
+#define GsROTOFF (1 << 27) /**< Sprite rotation and scaling off */
+#define GsAZERO (0 << 28)  /**< Semi-transparency rate: 50% back + 50% front */
+#define GsAONE (1 << 28)   /**< Semi-transparency rate: 100% back + 100% front */
+#define GsATWO (2 << 28)   /**< Semi-transparency rate: 100% back - 100% front */
+#define GsATHREE (3 << 28) /**< Semi-transparency rate: 100% back + 25% front */
+#define GsALON (1 << 30)   /**< Semi-transparency on */
+#define GsAON GsALON       /**< Semi-transparency on (older psyz name) */
+#define GsDOFF (1 << 31)   /**< Display off */
+
+/* GsTMDFlag bits: how TMD data was preprocessed */
+#define GsTMDFlagGRD 0x04 /**< Gradation (per-vertex colour) polygons */
+
+/* GPU command codes of the primitives libgs builds from TMD data */
+#define GPU_COM_F3 0x20   /**< Flat triangle */
+#define GPU_COM_TF3 0x24  /**< Flat textured triangle */
+#define GPU_COM_G3 0x30   /**< Gouraud triangle */
+#define GPU_COM_TG3 0x34  /**< Gouraud textured triangle */
+#define GPU_COM_F4 0x28   /**< Flat quad */
+#define GPU_COM_TF4 0x2c  /**< Flat textured quad */
+#define GPU_COM_G4 0x38   /**< Gouraud quad */
+#define GPU_COM_TG4 0x3c  /**< Gouraud textured quad */
+#define GPU_COM_NF3 0x21  /**< Flat triangle, no lighting */
+#define GPU_COM_NTF3 0x25 /**< Flat textured triangle, no lighting */
+#define GPU_COM_NG3 0x31  /**< Gouraud triangle, no lighting */
+#define GPU_COM_NTG3 0x35 /**< Gouraud textured triangle, no lighting */
+#define GPU_COM_NF4 0x29  /**< Flat quad, no lighting */
+#define GPU_COM_NTF4 0x2d /**< Flat textured quad, no lighting */
+#define GPU_COM_NG4 0x39  /**< Gouraud quad, no lighting */
+#define GPU_COM_NTG4 0x3d /**< Gouraud textured quad, no lighting */
 
 typedef unsigned char PACKET;
 
@@ -243,15 +277,19 @@ typedef struct {
 } GsSPRITE;
 
 /**
- * @brief Image handler
+ * @brief TIM image information
  *
- * Used to draw images.
+ * Filled by GsGetTimInfo() from TIM data: where the pixel data and the CLUT
+ * go in VRAM, their sizes, and where they are in the TIM.
  */
 typedef struct {
-    short x, y;     /**< Display position */
-    short w, h;     /**< Image size */
-    u_short* pixel; /**< Pointer to pixel data */
-    u_short* clut;  /**< Pointer to CLUT data */
+    u_long pmode;   /**< Pixel mode (bits 0-2) and CLUT flag (bit 3) */
+    short px, py;   /**< Pixel data VRAM position */
+    u_short pw, ph; /**< Pixel data size (in 16-bit units) */
+    u_long* pixel;  /**< Pointer to pixel data */
+    short cx, cy;   /**< CLUT VRAM position */
+    u_short cw, ch; /**< CLUT size */
+    u_long* clut;   /**< Pointer to CLUT data */
 } GsIMAGE;
 
 /**
@@ -260,7 +298,7 @@ typedef struct {
  * Used to set fog parameters with GsSetFogParam().
  */
 typedef struct {
-    int dqa;              /**< Fog coefficient A */
+    short dqa;            /**< Fog coefficient A */
     int dqb;              /**< Fog coefficient B */
     u_char rfc, gfc, bfc; /**< Fog color (R, G, B) */
 } GsFOGPARAM;
@@ -271,8 +309,8 @@ typedef struct {
  * Used to set flat light source with GsSetFlatLight().
  */
 typedef struct {
-    SVECTOR direction; /**< Light direction vector */
-    u_char r, g, b;    /**< Light color */
+    int vx, vy, vz; /**< Light direction vector */
+    u_char r, g, b; /**< Light color */
 } GsF_LIGHT;
 
 /**
@@ -309,9 +347,249 @@ typedef struct {
  * Used to manage multiple objects for TOD animation.
  */
 typedef struct {
-    u_long n;      /**< Number of objects */
-    GsDOBJ2** top; /**< Pointer to object array */
+    GsDOBJ2* top; /**< Pointer to object array */
+    int nobj;     /**< Number of objects in use */
+    int maxobj;   /**< Number of objects in the array */
 } GsOBJTABLE2;
+
+/**
+ * @brief Z clipping range
+ */
+typedef struct {
+    u_long farz;  /**< Far clip distance */
+    u_long nearz; /**< Near clip distance */
+} GsZCLIP;
+
+/*
+ * TMD primitives: the packet formats of a TMD file's primitive section, as
+ * the file stores them (see the TMD format's documentation). A primitive is
+ * a 4-byte header (out, in, dummy/ilen, cd/mode) followed by its fields;
+ * the name says which: F flat, G gouraud, T textured, N no normals (no
+ * lighting), 3/4 the vertex count, a trailing G per-vertex colours. Vertex
+ * and normal fields are indices into the object's tables, and fields named
+ * p, dummy or pN are padding.
+ */
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_short n0, v0;
+    u_short v1, v2;
+} TMD_P_F3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_short n0, v0;
+    u_short n1, v1;
+    u_short n2, v2;
+} TMD_P_G3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_char r1, g1, b1, dummy1;
+    u_char r2, g2, b2, dummy2;
+    u_short n0, v0;
+    u_short v1, v2;
+} TMD_P_F3G;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_char r1, g1, b1, dummy1;
+    u_char r2, g2, b2, dummy2;
+    u_short n0, v0;
+    u_short n1, v1;
+    u_short n2, v2;
+} TMD_P_G3G;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_short v0, v1;
+    u_short v2, p;
+} TMD_P_NF3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_char r1, g1, b1, p1;
+    u_char r2, g2, b2, p2;
+    u_short v0, v1;
+    u_short v2, p;
+} TMD_P_NG3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_short n0, v0;
+    u_short v1, v2;
+    u_short v3, p;
+} TMD_P_F4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_short n0, v0;
+    u_short n1, v1;
+    u_short n2, v2;
+    u_short n3, v3;
+} TMD_P_G4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_short v0, v1;
+    u_short v2, v3;
+} TMD_P_NF4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char r0, g0, b0, code;
+    u_char r1, g1, b1, p1;
+    u_char r2, g2, b2, p2;
+    u_char r3, g3, b3, p3;
+    u_short v0, v1;
+    u_short v2, v3;
+} TMD_P_NG4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p;
+    u_short n0, v0;
+    u_short v1, v2;
+} TMD_P_TF3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p;
+    u_short n0, v0;
+    u_short n1, v1;
+    u_short n2, v2;
+} TMD_P_TG3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p0;
+    u_char r0, g0, b0, p1;
+    u_short v0, v1;
+    u_short v2, p2;
+} TMD_P_TNF3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p0;
+    u_char r0, g0, b0, p1;
+    u_char r1, g1, b1, p2;
+    u_char r2, g2, b2, p3;
+    u_short v0, v1;
+    u_short v2, p4;
+} TMD_P_TNG3;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p0;
+    u_char tu3, tv3;
+    u_short p1;
+    u_short n0, v0;
+    u_short v1, v2;
+    u_short v3, p2;
+} TMD_P_TF4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p0;
+    u_char tu3, tv3;
+    u_short p1;
+    u_short n0, v0;
+    u_short n1, v1;
+    u_short n2, v2;
+    u_short n3, v3;
+} TMD_P_TG4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p0;
+    u_char tu3, tv3;
+    u_short p1;
+    u_char r0, g0, b0, p2;
+    u_short v0, v1;
+    u_short v2, v3;
+} TMD_P_TNF4;
+
+typedef struct {
+    u_char out, in, dummy, cd;
+    u_char tu0, tv0;
+    u_short clut;
+    u_char tu1, tv1;
+    u_short tpage;
+    u_char tu2, tv2;
+    u_short p0;
+    u_char tu3, tv3;
+    u_short p1;
+    u_char r0, g0, b0, p2;
+    u_char r1, g1, b1, p3;
+    u_char r2, g2, b2, p4;
+    u_char r3, g3, b3, p5;
+    u_short v0, v1;
+    u_short v2, v3;
+} TMD_P_TNG4;
+
+/**
+ * @brief One TMD object's tables, as the GsTMDfast and GsTMDdiv drawing
+ * functions take them
+ */
+struct TMD_STRUCT {
+    u_long* vertop;  /**< Vertex table */
+    u_long vern;     /**< Number of vertices */
+    u_long* nortop;  /**< Normal table */
+    u_long norn;     /**< Number of normals */
+    u_long* primtop; /**< Primitive section */
+    u_long primn;    /**< Number of primitives */
+    u_long scale;    /**< Scale (unused by libgs) */
+};
+
+/* Globals */
+
+extern MATRIX GsIDMATRIX;      /**< Identity matrix, translation zero */
+extern PACKET* GsOUT_PACKET_P; /**< Packet work area (GsSetWorkBase) */
+extern int GsLIGHT_MODE;       /**< Lighting mode (GsSetLightMode) */
 
 /* Function declarations */
 
@@ -447,11 +725,13 @@ void GsInit3D(void);
 /**
  * @brief Initialize coordinate system
  *
- * Initializes a GsCOORDINATE2 structure.
+ * Initializes base to the identity, with super as its parent coordinate
+ * system (WORLD, that is NULL, for the world).
  *
- * @param coord Pointer to coordinate system to initialize
+ * @param super Pointer to the parent coordinate system
+ * @param base Pointer to coordinate system to initialize
  */
-void GsInitCoordinate2(GsCOORDINATE2* coord);
+void GsInitCoordinate2(GsCOORDINATE2* super, GsCOORDINATE2* base);
 
 /**
  * @brief Calculate local screen matrix
@@ -491,8 +771,9 @@ void GsGetLws(GsCOORDINATE2* coord, MATRIX* lw, MATRIX* ls);
  * Calculates GsWSMATRIX from viewpoint information.
  *
  * @param pv Viewpoint position information
+ * @return 0 on success
  */
-void GsSetRefView2(GsRVIEW2* pv);
+int GsSetRefView2(GsRVIEW2* pv);
 
 /**
  * @brief Set viewpoint (reference type, high precision)
@@ -500,8 +781,9 @@ void GsSetRefView2(GsRVIEW2* pv);
  * High precision version of GsSetRefView2().
  *
  * @param pv Viewpoint position information
+ * @return 0 on success
  */
-void GsSetRefView2L(GsRVIEW2* pv);
+int GsSetRefView2L(GsRVIEW2* pv);
 
 /**
  * @brief Set viewpoint (matrix type)
@@ -509,42 +791,44 @@ void GsSetRefView2L(GsRVIEW2* pv);
  * Directly sets GsWSMATRIX from a matrix.
  *
  * @param pv Viewpoint position information
+ * @return 0 on success
  */
-void GsSetView2(GsVIEW2* pv);
+int GsSetView2(GsVIEW2* pv);
 
 /**
  * @brief Link object to TMD data (version 4)
  *
- * Links a GsDOBJ2 structure to TMD-format model data.
+ * Links a GsDOBJ2 structure to object n of TMD-format model data that
+ * GsMapModelingData() has mapped.
  *
- * @param objnum Number of objects
- * @param base Pointer to TMD data
- * @param objp Pointer to object handler array
+ * @param tmd_base Address of the TMD data's first object
+ * @param objp Pointer to object handler
+ * @param n Object number in the TMD data
  */
-void GsLinkObject4(u_long objnum, u_long* base, GsDOBJ2* objp);
+void GsLinkObject4(u_long tmd_base, GsDOBJ2* objp, int n);
 
 /**
  * @brief Link object to PMD data (version 3)
  *
  * Links a GsDOBJ3 structure to PMD-format model data.
  *
- * @param objnum Number of objects
- * @param base Pointer to PMD data
- * @param objp Pointer to object handler array
+ * @param pmd_base Address of the PMD data's first object
+ * @param objp Pointer to object handler
+ * @return Address after the object's data
  */
-void GsLinkObject3(u_long objnum, u_long* base, GsDOBJ3* objp);
+u_long GsLinkObject3(u_long pmd_base, GsDOBJ3* objp);
 
 /**
  * @brief Link object to TMD data (version 5)
  *
- * Links a GsDOBJ5 structure to TMD-format model data with preset packet
- * support.
+ * Links a GsDOBJ5 structure to object n of TMD-format model data, for use
+ * with preset packets.
  *
- * @param objnum Number of objects
- * @param base Pointer to TMD data
- * @param objp Pointer to object handler array
+ * @param tmd_base Address of the TMD data's first object
+ * @param objp Pointer to object handler
+ * @param n Object number in the TMD data
  */
-void GsLinkObject5(u_long objnum, u_long* base, GsDOBJ5* objp);
+void GsLinkObject5(u_long tmd_base, GsDOBJ5* objp, int n);
 
 /**
  * @brief Sort 3D object to OT (version 4)
@@ -554,8 +838,10 @@ void GsLinkObject5(u_long objnum, u_long* base, GsDOBJ5* objp);
  *
  * @param objp Pointer to object handler
  * @param otp Pointer to ordering table
+ * @param shift Right shift from the object's Z to its OT position
+ * @param scratch Work area, normally the scratchpad
  */
-void GsSortObject4(GsDOBJ2* objp, GsOT* otp);
+void GsSortObject4(GsDOBJ2* objp, GsOT* otp, int shift, u_long* scratch);
 
 /**
  * @brief Sort 3D object to OT (version 3)
@@ -564,8 +850,9 @@ void GsSortObject4(GsDOBJ2* objp, GsOT* otp);
  *
  * @param objp Pointer to object handler
  * @param otp Pointer to ordering table
+ * @param shift Right shift from the object's Z to its OT position
  */
-void GsSortObject3(GsDOBJ3* objp, GsOT* otp);
+void GsSortObject3(GsDOBJ3* objp, GsOT* otp, int shift);
 
 /**
  * @brief Sort 3D object to OT (version 5)
@@ -574,8 +861,10 @@ void GsSortObject3(GsDOBJ3* objp, GsOT* otp);
  *
  * @param objp Pointer to object handler
  * @param otp Pointer to ordering table
+ * @param shift Right shift from the object's Z to its OT position
+ * @param scratch Work area, normally the scratchpad
  */
-void GsSortObject5(GsDOBJ5* objp, GsOT* otp);
+void GsSortObject5(GsDOBJ5* objp, GsOT* otp, int shift, u_long* scratch);
 
 /**
  * @brief Sort background to OT
@@ -584,8 +873,9 @@ void GsSortObject5(GsDOBJ5* objp, GsOT* otp);
  *
  * @param bg Pointer to background handler
  * @param otp Pointer to ordering table
+ * @param pri Position in the ordering table (shifted by the OT's length)
  */
-void GsSortBg(GsBG* bg, GsOT* otp);
+void GsSortBg(GsBG* bg, GsOT* otp, unsigned short pri);
 
 /**
  * @brief Sort box fill to OT
@@ -594,8 +884,9 @@ void GsSortBg(GsBG* bg, GsOT* otp);
  *
  * @param boxf Pointer to rectangle handler
  * @param otp Pointer to ordering table
+ * @param pri Position in the ordering table (shifted by the OT's length)
  */
-void GsSortBoxFill(GsBOXF* boxf, GsOT* otp);
+void GsSortBoxFill(GsBOXF* boxf, GsOT* otp, unsigned short pri);
 
 /**
  * @brief Sort line to OT
@@ -604,8 +895,9 @@ void GsSortBoxFill(GsBOXF* boxf, GsOT* otp);
  *
  * @param line Pointer to line handler
  * @param otp Pointer to ordering table
+ * @param pri Position in the ordering table (shifted by the OT's length)
  */
-void GsSortLine(GsLINE* line, GsOT* otp);
+void GsSortLine(GsLINE* line, GsOT* otp, unsigned short pri);
 
 /**
  * @brief Sort Gouraud line to OT
@@ -614,8 +906,9 @@ void GsSortLine(GsLINE* line, GsOT* otp);
  *
  * @param gline Pointer to Gouraud line handler
  * @param otp Pointer to ordering table
+ * @param pri Position in the ordering table (shifted by the OT's length)
  */
-void GsSortGLine(GsGLINE* gline, GsOT* otp);
+void GsSortGLine(GsGLINE* gline, GsOT* otp, unsigned short pri);
 
 /**
  * @brief Sort sprite to OT
@@ -624,8 +917,9 @@ void GsSortGLine(GsGLINE* gline, GsOT* otp);
  *
  * @param sprite Pointer to sprite handler
  * @param otp Pointer to ordering table
+ * @param pri Position in the ordering table (shifted by the OT's length)
  */
-void GsSortSprite(GsSPRITE* sprite, GsOT* otp);
+void GsSortSprite(GsSPRITE* sprite, GsOT* otp, unsigned short pri);
 
 /**
  * @brief Set light matrix
@@ -654,8 +948,9 @@ void GsSetAmbient(long r, long g, long b);
  *
  * @param id Light source ID (0-2)
  * @param light Pointer to light source data
+ * @return 0 on success
  */
-void GsSetFlatLight(int id, GsF_LIGHT* light);
+int GsSetFlatLight(int id, GsF_LIGHT* light);
 
 /**
  * @brief Set fog parameter
@@ -725,10 +1020,61 @@ PACKET* GsGetWorkBase(void);
 /**
  * @brief Multiply coordinate matrices
  *
- * Multiplies coordinate system matrices.
+ * Multiplies two coordinate matrices, rotation and translation: m2 = m1 *
+ * m2.
  *
- * @param coord Pointer to coordinate system
+ * @param m1 Pointer to first matrix
+ * @param m2 Pointer to second matrix (input/output)
  */
-void GsMulCoord2(GsCOORDINATE2* coord);
+void GsMulCoord2(MATRIX* m1, MATRIX* m2);
+
+/**
+ * @brief Set lighting mode
+ *
+ * Sets the default lighting mode for objects (GsLMODE_NORMAL, GsLMODE_FOG,
+ * GsLMODE_LOFF), stored in GsLIGHT_MODE.
+ *
+ * @param mode Lighting mode
+ */
+void GsSetLightMode(int mode);
+
+/**
+ * @brief Set local screen matrix
+ *
+ * Sets the local screen matrix (from GsGetLs()) in the GTE as the rotation
+ * and translation for the following perspective transforms.
+ *
+ * @param mp Pointer to local screen matrix
+ */
+void GsSetLsMatrix(MATRIX* mp);
+
+/**
+ * @brief Set near clip distance
+ *
+ * Polygons nearer than this are not drawn.
+ *
+ * @param clip_near Near clip distance
+ */
+void GsSetNearClip(long clip_near);
+
+/**
+ * @brief Set far clip distance
+ *
+ * Polygons farther than this are not drawn.
+ *
+ * @param clip_far Far clip distance
+ */
+void GsSetFarClip(long clip_far);
+
+/**
+ * @brief Get TIM image information
+ *
+ * Reads the header of TIM data and fills tim with where its pixels and CLUT
+ * are, and where they go in VRAM.
+ *
+ * @param im Pointer to TIM data, after its ID word
+ * @param tim Pointer to the image information to fill
+ */
+void GsGetTimInfo(u_long* im, GsIMAGE* tim);
 
 #endif

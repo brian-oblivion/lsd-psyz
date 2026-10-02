@@ -23,7 +23,10 @@ static short PSDBASEX[2];
 static short PSDBASEY[2];
 static DRAWENV GsDRAWENV = {0};
 static DISPENV GsDISPENV = {0};
-static PACKET* GsOUT_PACKET_P;
+
+PACKET* GsOUT_PACKET_P;
+int GsLIGHT_MODE;
+MATRIX GsIDMATRIX = {{{4096, 0, 0}, {0, 4096, 0}, {0, 0, 4096}}, {0, 0, 0}};
 
 void gpu_init(unsigned short x, unsigned short y, unsigned short intmode,
               unsigned short dith, unsigned short varmmode) {
