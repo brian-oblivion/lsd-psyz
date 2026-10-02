@@ -12,12 +12,18 @@
 #define GTE_SET_DQA(v) Psyz_GteCtrlWrite(27, (unsigned int)(v))
 #define GTE_SET_DQB(v) Psyz_GteCtrlWrite(28, (unsigned int)(v))
 #define GTE_READ_IR0(v) ((v) = (int)Psyz_GteDataRead(8))
+#define GTE_READ_IR1(v) ((v) = (int)Psyz_GteDataRead(9))
+#define GTE_READ_IR2(v) ((v) = (int)Psyz_GteDataRead(10))
+#define GTE_READ_IR3(v) ((v) = (int)Psyz_GteDataRead(11))
 #else
 #define GTE_SET_ZSF3(v) __asm__ volatile("ctc2	%0, $29" : : "r"(v))
 #define GTE_SET_ZSF4(v) __asm__ volatile("ctc2	%0, $30" : : "r"(v))
 #define GTE_SET_DQA(v) __asm__ volatile("ctc2	%0, $27" : : "r"(v))
 #define GTE_SET_DQB(v) __asm__ volatile("ctc2	%0, $28" : : "r"(v))
 #define GTE_READ_IR0(v) __asm__ volatile("mfc2	%0, $8;nop" : "=r"(v))
+#define GTE_READ_IR1(v) __asm__ volatile("mfc2	%0, $9;nop" : "=r"(v))
+#define GTE_READ_IR2(v) __asm__ volatile("mfc2	%0, $10;nop" : "=r"(v))
+#define GTE_READ_IR3(v) __asm__ volatile("mfc2	%0, $11;nop" : "=r"(v))
 #endif
 
 ZTEST_SETUP(gte) { InitGeom(); }
@@ -864,6 +870,228 @@ ZTEST(gte, apply_matrix_ignores_translation) {
     zexpect_s32_eq(5, out.vx);
     zexpect_s32_eq(6, out.vy);
     zexpect_s32_eq(7, out.vz);
+}
+
+// The two bytes between m[2][2] and t
+static unsigned char* MatrixPad(MATRIX* m) {
+    return (unsigned char*)m + sizeof(m->m);
+}
+
+ZTEST(gte, mul_matrix2_writes_right_operand) {
+    MATRIX a = {{{0, 0x1000, 0}, {0x0800, 0, 0}, {0, 0, -0x1000}}, {1, 2, 3}};
+    MATRIX b = {{{3, -3, 0x100}, {10, 20, 30}, {1, -2, -5}}, {4, 5, 6}};
+    MATRIX tr = {{{0}}, {7, 8, 9}};
+    MATRIX a_exp = a;
+    // row 1 is half of b's row 0, rounded toward -infinity
+    MATRIX exp = {{{10, 20, 30}, {1, -2, 0x80}, {-1, 2, 5}}, {4, 5, 6}};
+    // a goes to the rotation registers; the translation is left alone
+    MATRIX rot_exp = {{{0, 0x1000, 0}, {0x0800, 0, 0}, {0, 0, -0x1000}},
+                      {7, 8, 9}};
+    MATRIX rot;
+    int flag = -1;
+    SetTransMatrix(&tr);
+    MatrixPad(&b)[0] = MatrixPad(&b)[1] = 0xAB;
+    zexpect_ptr_eq(&b, MulMatrix2(&a, &b));
+    gte_stflg(&flag);
+    ReadRotMatrix(&rot);
+    zexpect_matrix_eq(&exp, &b);
+    zexpect_matrix_eq(&a_exp, &a);
+    zexpect_matrix_eq(&rot_exp, &rot);
+    zexpect_u32_eq(0, (unsigned int)flag);
+    // m[2][2] is stored as the 32-bit IR3, so the padding gets its sign
+    zexpect_s32_eq(0, MatrixPad(&b)[0]);
+    zexpect_s32_eq(0, MatrixPad(&b)[1]);
+}
+
+ZTEST(gte, mul_matrix2_saturates) {
+    MATRIX a = {{{0x2000, 0, 0}, {0, 0x2000, 0}, {0, 0, 0x2000}}, {0, 0, 0}};
+    MATRIX b = {
+        {{0x5000, 0x100, -0x10}, {-0x5000, 0x1000, 0}, {0, 0x3FFF, -0x5000}},
+        {0, 0, 0}};
+    MATRIX exp = {
+        {{0x7FFF, 0x200, -0x20}, {-0x8000, 0x2000, 0}, {0, 0x7FFE, -0x8000}},
+        {0, 0, 0}};
+    int flag = 0;
+    MulMatrix2(&a, &b);
+    gte_stflg(&flag);
+    zexpect_matrix_eq(&exp, &b);
+    // FLAG is the last column's only: IR3 saturated, which is not an error
+    // bit; the first column's IR1/IR2 saturation is gone
+    zexpect_u32_eq(0x00400000, (unsigned int)flag);
+    zexpect_s32_eq(0xFF, MatrixPad(&b)[0]);
+    zexpect_s32_eq(0xFF, MatrixPad(&b)[1]);
+}
+
+ZTEST(gte, mul_matrix2_in_place) {
+    MATRIX a = {{{0x1000, 0x1000, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                {1, 2, 3}};
+    MATRIX exp = {{{0x1000, 0x2000, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                  {1, 2, 3}};
+    MulMatrix2(&a, &a);
+    zexpect_matrix_eq(&exp, &a);
+}
+
+ZTEST(gte, apply_matrix_sv) {
+    MATRIX m = {{{0x1000, 0, 0}, {0, 0x0800, 0}, {0, 0, -0x1000}},
+                {100, 200, 300}};
+    MATRIX tr = {{{0}}, {7, 8, 9}};
+    MATRIX rot_exp = {{{0x1000, 0, 0}, {0, 0x0800, 0}, {0, 0, -0x1000}},
+                      {7, 8, 9}};
+    MATRIX rot;
+    SVECTOR in = {100, -3, 7, 0x55};
+    SVECTOR out = {0, 0, 0, 0x77};
+    SetTransMatrix(&tr);
+    zexpect_ptr_eq(&out, ApplyMatrixSV(&m, &in, &out));
+    ReadRotMatrix(&rot);
+    zexpect_s16_eq(100, out.vx);
+    zexpect_s16_eq(-2, out.vy);
+    zexpect_s16_eq(-7, out.vz);
+    zexpect_s16_eq(0x77, out.pad);
+    zexpect_matrix_eq(&rot_exp, &rot);
+}
+
+ZTEST(gte, apply_matrix_sv_saturates) {
+    MATRIX m = {{{0x2000, 0, 0}, {0, 0x2000, 0}, {0, 0, 0x2000}}, {0, 0, 0}};
+    SVECTOR in = {0x4000, -0x4001, 0x1234};
+    SVECTOR out = {0};
+    VECTOR mac;
+    int flag = 0;
+    ApplyMatrixSV(&m, &in, &out);
+    gte_stlvnl(&mac);
+    gte_stflg(&flag);
+    zexpect_s16_eq(0x7FFF, out.vx);
+    zexpect_s16_eq(-0x8000, out.vy);
+    zexpect_s16_eq(0x2468, out.vz);
+    zexpect_s32_eq(0x8000, mac.vx);
+    zexpect_s32_eq(-0x8002, mac.vy);
+    zexpect_s32_eq(0x2468, mac.vz);
+    zexpect_u32_eq(0x81800000, (unsigned int)flag);
+}
+
+ZTEST(gte, apply_matrix_lv_identity) {
+    MATRIX m = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                {100, 200, 300}};
+    MATRIX tr = {{{0}}, {7, 8, 9}};
+    MATRIX rot_exp = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                      {7, 8, 9}};
+    MATRIX rot;
+    VECTOR in = {100000, -100000, 0x3FFFFFFF, 0x55};
+    VECTOR out = {0, 0, 0, 0x77};
+    SetTransMatrix(&tr);
+    zexpect_ptr_eq(&out, ApplyMatrixLV(&m, &in, &out));
+    ReadRotMatrix(&rot);
+    zexpect_s32_eq(100000, out.vx);
+    zexpect_s32_eq(-100000, out.vy);
+    zexpect_s32_eq(0x3FFFFFFF, out.vz);
+    zexpect_s32_eq(0x77, out.pad);
+    zexpect_matrix_eq(&rot_exp, &rot);
+}
+
+ZTEST(gte, apply_matrix_lv_rounds_toward_negative_infinity) {
+    MATRIX m = {{{0x0800, 0, 0}, {0, 0x0800, 0}, {0, 0, 0x0800}}, {0, 0, 0}};
+    VECTOR in = {-3, -0x8003, 3};
+    VECTOR out = {0};
+    ApplyMatrixLV(&m, &in, &out);
+    zexpect_s32_eq(-2, out.vx);
+    zexpect_s32_eq(-0x4002, out.vy);
+    zexpect_s32_eq(1, out.vz);
+}
+
+// v is split by magnitude into hi * 0x8000 + lo, and hi goes through a 16-bit
+// IR register: from |v| >= 0x40000000 hi wraps and the result with it
+ZTEST(gte, apply_matrix_lv_truncates_high_part) {
+    MATRIX m = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    VECTOR in = {0x40000000, 0x7FFFFFFF, -0x40008000};
+    VECTOR in2 = {-0x7FFFFFFF - 1, -0x40000000, -0x40000001};
+    VECTOR out = {0};
+    ApplyMatrixLV(&m, &in, &out);
+    zexpect_s32_eq(-0x40000000, out.vx); // hi 0x8000 -> -0x8000
+    zexpect_s32_eq(-1, out.vy);          // hi 0xFFFF -> -1, lo 0x7FFF
+    zexpect_s32_eq(0x3FFF8000, out.vz);  // hi -0x8001 -> 0x7FFF
+    ApplyMatrixLV(&m, &in2, &out);
+    zexpect_s32_eq(0, out.vx); // hi -0x10000 -> 0
+    zexpect_s32_eq(-0x40000000, out.vy);
+    zexpect_s32_eq(-0x40000001, out.vz);
+}
+
+// The high pass is m * hi in a 32-bit MAC, then << 3: the result wraps
+ZTEST(gte, apply_matrix_lv_wraps) {
+    MATRIX m = {{{0x7FFF, 0x7FFF, 0x7FFF}, {0, 0, 0}, {0, 0, 0}}, {0, 0, 0}};
+    VECTOR in = {0x3FFF8000, 0x3FFF8000, 0x3FFF8000};
+    VECTOR out = {0};
+    ApplyMatrixLV(&m, &in, &out);
+    // 3 * 0x7FFF * 0x7FFF * 8 = 0x5FFE80018
+    zexpect_s32_eq((int)0xFFE80018, out.vx);
+    zexpect_s32_eq(0, out.vy);
+    zexpect_s32_eq(0, out.vz);
+}
+
+// The result is not saturated, but the GTE is left with the low pass: MAC is
+// m * lo >> 12, IR and FLAG its saturation
+ZTEST(gte, apply_matrix_lv_leaves_low_pass) {
+    MATRIX m = {{{0x2000, 0, 0}, {0, 0x2000, 0}, {0, 0, 0x2000}}, {0, 0, 0}};
+    VECTOR in = {0x7FFF, -0x7FFF, 0x12345678};
+    VECTOR out = {0};
+    VECTOR mac;
+    int ir1, ir2, ir3, flag = 0;
+    ApplyMatrixLV(&m, &in, &out);
+    gte_stlvnl(&mac);
+    GTE_READ_IR1(ir1);
+    GTE_READ_IR2(ir2);
+    GTE_READ_IR3(ir3);
+    gte_stflg(&flag);
+    zexpect_s32_eq(0xFFFE, out.vx);
+    zexpect_s32_eq(-0xFFFE, out.vy);
+    zexpect_s32_eq(0x2468ACF0, out.vz);
+    zexpect_s32_eq(0xFFFE, mac.vx);
+    zexpect_s32_eq(-0xFFFE, mac.vy);
+    zexpect_s32_eq(0xACF0, mac.vz); // lo of 0x12345678 is 0x5678
+    zexpect_s32_eq(0x7FFF, ir1);
+    zexpect_s32_eq(-0x8000, ir2);
+    zexpect_s32_eq(0x7FFF, ir3);
+    zexpect_u32_eq(0x81C00000, (unsigned int)flag);
+}
+
+ZTEST(gte, apply_matrix_lv_in_place) {
+    MATRIX m = {{{0, 0x1000, 0}, {-0x1000, 0, 0}, {0, 0, 0x1000}},
+                {1000, 2000, -3000}};
+    ApplyMatrixLV(&m, (VECTOR*)m.t, (VECTOR*)m.t);
+    zexpect_s32_eq(2000, m.t[0]);
+    zexpect_s32_eq(-1000, m.t[1]);
+    zexpect_s32_eq(-3000, m.t[2]);
+}
+
+ZTEST(gte, square0) {
+    VECTOR in = {3, -4, 100, 0x55};
+    VECTOR out = {0, 0, 0, 0x77};
+    int flag = -1;
+    zexpect_ptr_eq(&out, Square0(&in, &out));
+    gte_stflg(&flag);
+    zexpect_s32_eq(9, out.vx);
+    zexpect_s32_eq(16, out.vy);
+    zexpect_s32_eq(10000, out.vz);
+    zexpect_s32_eq(0x77, out.pad);
+    zexpect_u32_eq(0, (unsigned int)flag);
+}
+
+// Only the low 16 bits are squared; the result is the whole MAC, while IR
+// saturates to 0..7FFF
+ZTEST(gte, square0_truncates_inputs_and_saturates_ir) {
+    VECTOR in = {0x10003, 0x18000, 0x12345};
+    VECTOR out = {0};
+    int ir1, ir2, ir3, flag = 0;
+    Square0(&in, &out);
+    GTE_READ_IR1(ir1);
+    GTE_READ_IR2(ir2);
+    GTE_READ_IR3(ir3);
+    gte_stflg(&flag);
+    zexpect_s32_eq(9, out.vx);
+    zexpect_s32_eq(0x40000000, out.vy); // (-0x8000)^2
+    zexpect_s32_eq(0x4DBF099, out.vz);  // 0x2345^2
+    zexpect_s32_eq(9, ir1);
+    zexpect_s32_eq(0x7FFF, ir2);
+    zexpect_s32_eq(0x7FFF, ir3);
+    zexpect_u32_eq(0x80C00000, (unsigned int)flag);
 }
 
 ZTEST(gte, rot_trans_applies_translation) {

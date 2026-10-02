@@ -350,6 +350,18 @@ MATRIX* MulMatrix(MATRIX* m0, MATRIX* m1);
 MATRIX* MulMatrix0(MATRIX* m0, MATRIX* m1, MATRIX* m2);
 
 /**
+ * @brief Multiply matrices, right operand replaced
+ *
+ * Multiplies two matrices: m1 = m0 * m1. The GTE rotation matrix is
+ * overwritten.
+ *
+ * @param m0 Pointer to first matrix
+ * @param m1 Pointer to second matrix (input/output)
+ * @return m1
+ */
+MATRIX* MulMatrix2(MATRIX* m0, MATRIX* m1);
+
+/**
  * @brief Multiply matrix by rotation matrix
  *
  * Multiplies a matrix by the current rotation matrix.
@@ -658,6 +670,33 @@ long NormalClip(long sxy0, long sxy1, long sxy2);
  * @param v1 Pointer to output vector
  */
 void ApplyMatrix(MATRIX* m, SVECTOR* v0, VECTOR* v1);
+
+/**
+ * @brief Apply matrix to a short vector, short result
+ *
+ * Multiplies the short vector v0 by m: v1 = m * v0. The translation part of
+ * m is not used. The GTE rotation matrix is overwritten.
+ *
+ * @param m Pointer to matrix
+ * @param v0 Pointer to input vector
+ * @param v1 Pointer to output vector
+ * @return v1
+ */
+SVECTOR* ApplyMatrixSV(MATRIX* m, SVECTOR* v0, SVECTOR* v1);
+
+/**
+ * @brief Apply matrix to a long vector
+ *
+ * Multiplies the 32-bit vector v0 by m: v1 = m * v0, without the GTE's
+ * 16-bit input limit. The translation part of m is not used. The GTE
+ * rotation matrix is overwritten.
+ *
+ * @param m Pointer to matrix
+ * @param v0 Pointer to input vector
+ * @param v1 Pointer to output vector
+ * @return v1
+ */
+VECTOR* ApplyMatrixLV(MATRIX* m, VECTOR* v0, VECTOR* v1);
 
 /**
  * @brief Apply rotation matrix
