@@ -1,5 +1,7 @@
 #include <psyz.h>
 #include <rand.h>
+#include <libc.h>
+#include <string.h>
 #include "ztest.h"
 
 // libc2's rand() starts from a zero seed and returns bits 16 to 30 of its
@@ -23,4 +25,10 @@ ZTEST(libc, rand_max) {
         zexpect_s32_ge(0, r);
         zexpect_s32_le(RAND_MAX, r);
     }
+}
+
+ZTEST(libc, itoa_decimal) {
+    zexpect_s32_eq(0, strcmp("0", itoa(0)));
+    zexpect_s32_eq(0, strcmp("1234", itoa(1234)));
+    zexpect_s32_eq(0, strcmp("-2147483648", itoa(-2147483647 - 1)));
 }
