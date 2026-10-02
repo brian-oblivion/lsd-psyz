@@ -1560,6 +1560,52 @@ MATRIX* MulMatrix(MATRIX* m0, MATRIX* m1) {
     return m0;
 }
 
+// MVMVA sf=1 lm=0, rotation matrix * V0, no translation
+#define MVMVA_RT_V0_SF 0x0486012
+// MVMVA lm=0, rotation matrix * IR, no translation; sf=0 and sf=1
+#define MVMVA_RT_IR 0x041E012
+#define MVMVA_RT_IR_SF 0x049E012
+
+// The libgte matrix calls load their matrix into the rotation registers with
+// ctc2 and leave it there; the translation registers are not touched.
+static void load_rot_matrix(MATRIX* m) {
+    int i, j;
+    for (i = 0; i < 3; i++) {
+        for (j = 0; j < 3; j++) {
+            M.m[i][j] = m->m[i][j];
+        }
+    }
+}
+
+// m1 = m0 * m1, one MVMVA per column of m1. The results come from IR, so each
+// element saturates to -8000..7FFF. FLAG is the one of the last column.
+MATRIX* MulMatrix2(MATRIX* m0, MATRIX* m1) {
+    short r[3][3];
+    unsigned char* pad;
+    int j;
+
+    load_rot_matrix(m0);
+    for (j = 0; j < 3; j++) {
+        V0.vx = m1->m[0][j];
+        V0.vy = m1->m[1][j];
+        V0.vz = m1->m[2][j];
+        MVMVA(MVMVA_RT_V0_SF);
+        r[0][j] = IR1;
+        r[1][j] = IR2;
+        r[2][j] = IR3;
+    }
+    for (j = 0; j < 3; j++) {
+        m1->m[j][0] = r[j][0];
+        m1->m[j][1] = r[j][1];
+        m1->m[j][2] = r[j][2];
+    }
+    // m[2][2] is stored as the whole 32-bit IR3 register, so the two padding
+    // bytes after it receive IR3's sign extension
+    pad = (unsigned char*)m1 + sizeof(m1->m);
+    pad[0] = pad[1] = IR3 < 0 ? 0xFF : 0x00;
+    return m1;
+}
+
 // RTPS, RTPT, NCLIP, AVSZ3, AVSZ4 are implementations after
 // https://problemkaputt.de/psxspx-gte-coordinate-calculation-commands.htm
 
@@ -2361,6 +2407,19 @@ VECTOR* OuterProduct12(VECTOR* v0, VECTOR* v1, VECTOR* v2) {
     return v2;
 }
 
+// SQR sf=0 lm=1 on the low 16 bits of each component; v1 gets the untruncated
+// MAC, IR is left saturated to 0..7FFF.
+VECTOR* Square0(VECTOR* v0, VECTOR* v1) {
+    IR1 = (short)v0->vx;
+    IR2 = (short)v0->vy;
+    IR3 = (short)v0->vz;
+    SQR(0x0A00428);
+    v1->vx = MAC1;
+    v1->vy = MAC2;
+    v1->vz = MAC3;
+    return v1;
+}
+
 void Psyz_GteStsxy(unsigned int* out) { *out = pack_xy(SXP, SYP); }
 
 void Psyz_GteStsxy3(
@@ -2560,6 +2619,63 @@ void ApplyMatrix(MATRIX* m, SVECTOR* v0, VECTOR* v1) {
 }
 
 void ApplyRotMatrix(SVECTOR* v0, VECTOR* v1) { ApplyMatrix(&M, v0, v1); }
+
+// v1 = m * v0 >> 12, saturated to -8000..7FFF through IR. v1->pad is kept.
+SVECTOR* ApplyMatrixSV(MATRIX* m, SVECTOR* v0, SVECTOR* v1) {
+    load_rot_matrix(m);
+    V0.vx = v0->vx;
+    V0.vy = v0->vy;
+    V0.vz = v0->vz;
+    MVMVA(MVMVA_RT_V0_SF);
+    v1->vx = IR1;
+    v1->vy = IR2;
+    v1->vz = IR3;
+    return v1;
+}
+
+// Splits x into hi * 0x8000 + lo by its magnitude, so both parts carry x's
+// sign and |lo| < 0x8000. hi is later truncated to s16 by the IR registers,
+// which wraps for |x| >= 0x40000000.
+static void split_long(int x, int* hi, int* lo) {
+    int n = x < 0 ? (int)(0u - (unsigned)x) : x;
+    *hi = n >> 15;
+    *lo = n & 0x7FFF;
+    if (x < 0) {
+        *hi = -*hi;
+        *lo = -*lo;
+    }
+}
+
+// v1 = m * v0 >> 12 for 32-bit v0, done as two MVMVA through IR:
+//   hi pass: MAC_hi = m * hi            (sf=0, 32-bit MAC)
+//   lo pass: MAC_lo = (m * lo) >> 12    (sf=1)
+//   v1      = MAC_hi * 8 + MAC_lo        (0x8000 >> 12 = 8, modulo 2^32)
+// so the hi part is exact and only the lo part rounds toward -infinity. Nothing
+// saturates the result: IR saturation only affects the IR/FLAG left behind.
+VECTOR* ApplyMatrixLV(MATRIX* m, VECTOR* v0, VECTOR* v1) {
+    int hi[3], lo[3];
+    unsigned int mac_hi[3];
+
+    load_rot_matrix(m);
+    split_long(v0->vx, &hi[0], &lo[0]);
+    split_long(v0->vy, &hi[1], &lo[1]);
+    split_long(v0->vz, &hi[2], &lo[2]);
+    IR1 = (short)hi[0];
+    IR2 = (short)hi[1];
+    IR3 = (short)hi[2];
+    MVMVA(MVMVA_RT_IR);
+    mac_hi[0] = (unsigned int)MAC1;
+    mac_hi[1] = (unsigned int)MAC2;
+    mac_hi[2] = (unsigned int)MAC3;
+    IR1 = (short)lo[0];
+    IR2 = (short)lo[1];
+    IR3 = (short)lo[2];
+    MVMVA(MVMVA_RT_IR_SF);
+    v1->vx = (int)(mac_hi[0] * 8u + (unsigned int)MAC1);
+    v1->vy = (int)(mac_hi[1] * 8u + (unsigned int)MAC2);
+    v1->vz = (int)(mac_hi[2] * 8u + (unsigned int)MAC3);
+    return v1;
+}
 
 // The wrappers finish every GTE step before writing through their pointers:
 // a store through an argument could alias the registers and force reloads.
