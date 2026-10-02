@@ -2380,6 +2380,13 @@ void Psyz_GteStsxy3Gt3(void* polyGte) {
 void Psyz_GteAvsz3(void) { AVSZ3(); }
 void Psyz_GteAvsz4(void) { AVSZ4(); }
 void Psyz_GteDpcs(void) { DPCS(0x0780010); }
+void Psyz_GteDpct(void) { DPCT(0x0F8002A); }
+void Psyz_GteNcds(void) { NCDS(0x0E80413); }
+// MVMVA with IR1-IR3 as the vector, no translation, shifted by 12: times the
+// rotation matrix (RTIR) or the light matrix (LLIR).
+void Psyz_GteRtir(void) { MVMVA(0x049E012); }
+void Psyz_GteLlir(void) { MVMVA(0x04BE012); }
+void Psyz_GteStdp(unsigned int* out) { *out = Psyz_GteDataRead(8); }
 void Psyz_GteNccs(void) { NCCS(0x108041B); }
 void Psyz_GteLcir(void) {
     int sf = CMD_SF(0x04DE012), lm = CMD_LM(0x04DE012);
@@ -2408,6 +2415,28 @@ void Psyz_GteStsxy3G3(void* polyGte) {
     poly->x2 = SX2;
     poly->y2 = SY2;
 }
+
+void Psyz_GteStsxy2(unsigned int* out) { *out = pack_xy(SX2, SY2); }
+
+// The first three vertices of a primitive get SXY0-SXY2, the screen-XY FIFO,
+// whatever lies between them in the primitive's layout.
+#define STSXY3_PRIM(type, p)                                                   \
+    do {                                                                       \
+        type* poly = (type*)(p);                                               \
+        poly->x0 = SX0;                                                        \
+        poly->y0 = SY0;                                                        \
+        poly->x1 = SX1;                                                        \
+        poly->y1 = SY1;                                                        \
+        poly->x2 = SX2;                                                        \
+        poly->y2 = SY2;                                                        \
+    } while (0)
+
+void Psyz_GteStsxy3F3(void* polyF3) { STSXY3_PRIM(POLY_F3, polyF3); }
+void Psyz_GteStsxy3F4(void* polyF4) { STSXY3_PRIM(POLY_F4, polyF4); }
+void Psyz_GteStsxy3Ft3(void* polyFt3) { STSXY3_PRIM(POLY_FT3, polyFt3); }
+void Psyz_GteStsxy3Ft4(void* polyFt4) { STSXY3_PRIM(POLY_FT4, polyFt4); }
+void Psyz_GteStsxy3G4(void* polyG4) { STSXY3_PRIM(POLY_G4, polyG4); }
+void Psyz_GteStsxy3Gt4(void* polyGt4) { STSXY3_PRIM(POLY_GT4, polyGt4); }
 
 void Psyz_GteLdv0(SVECTOR* v) {
     V0.vx = v->vx;
