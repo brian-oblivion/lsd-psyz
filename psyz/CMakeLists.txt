@@ -142,6 +142,7 @@ set(PSYZ_SOURCES
     ../decomp/src/libsnd/ut_cadsr.c
     ../decomp/src/libsnd/ut_gpa.c
     ../decomp/src/libsnd/ut_gva.c
+    ../decomp/src/libsnd/ut_gvh.c
     ../decomp/src/libsnd/ut_key.c
     ../decomp/src/libsnd/ut_keyv.c
     ../decomp/src/libsnd/ut_rdel.c

@@ -1,4 +1,9 @@
-#include <common.h>
-#include <libsnd.h>
+#include "libsnd_private.h"
 
-INCLUDE_ASM("asm/nonmatchings/libsnd/ut_gvh", SsUtGetVabHdr);
+short SsUtGetVabHdr(short vabId, VabHdr* vabhdrptr) {
+    if (_SsVmVSetUp(vabId, 0) != 0) {
+        return -1;
+    }
+    *vabhdrptr = *_svm_vh;
+    return 0;
+}
