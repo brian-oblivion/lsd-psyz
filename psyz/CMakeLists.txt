@@ -44,6 +44,7 @@ set(PSYZ_SOURCES
     ../decomp/src/libgte/sqrtbl.c
     ../decomp/src/libgte/ratan.c
     src/psyz/libgte.c
+    src/psyz/libgte_div.c
     src/psyz/libgs.c
     src/psyz/libcd.c
     ../decomp/src/libcd/iso9660.c
