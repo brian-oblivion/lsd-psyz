@@ -44,7 +44,7 @@ int psyz_open(const char* devname, int flag);
 int psyz_close(int fd);
 unsigned long psyz_lseek(int fd, unsigned int offset, int flag);
 long psyz_read(long fd, void* buf, long n);
-int psyz_write(int fd, char* buf, int n);
+int psyz_write(int fd, const void* buf, int n);
 long psyz_ioctl(int fd, int com, int arg);
 #endif
 

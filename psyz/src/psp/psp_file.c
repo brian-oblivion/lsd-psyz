@@ -258,7 +258,7 @@ long psyz_read(long fd, void* buf, long n) {
     return (long)sceIoRead((SceUID)fd, buf, (SceSize)n);
 }
 
-int psyz_write(int fd, char* buf, int n) {
+int psyz_write(int fd, const void* buf, int n) {
     return (int)sceIoWrite((SceUID)fd, buf, (SceSize)n);
 }
 
