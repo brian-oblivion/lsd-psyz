@@ -83,6 +83,7 @@ set(PSYZ_SOURCES
     ../decomp/src/libspu/s_sia.c
     ../decomp/src/libspu/s_sic.c
     ../decomp/src/libspu/s_sk.c
+    ../decomp/src/libspu/s_sm.c
     ../decomp/src/libspu/s_snc.c
     ../decomp/src/libspu/s_snv.c
     ../decomp/src/libspu/s_splv.c
@@ -110,37 +111,86 @@ set(PSYZ_SOURCES
     ../decomp/src/libspu/sr_gaks.c
     ../decomp/src/libspu/sr_sv.c
     src/psyz/libspu.c
+    ../decomp/src/libsnd/cc_0.c
+    ../decomp/src/libsnd/cc_10.c
+    ../decomp/src/libsnd/cc_100.c
+    ../decomp/src/libsnd/cc_101.c
+    ../decomp/src/libsnd/cc_11.c
+    ../decomp/src/libsnd/cc_121.c
+    ../decomp/src/libsnd/cc_6.c
+    ../decomp/src/libsnd/cc_64.c
+    ../decomp/src/libsnd/cc_7.c
+    ../decomp/src/libsnd/cc_91.c
+    ../decomp/src/libsnd/cc_98.c
+    ../decomp/src/libsnd/cc_99.c
+    ../decomp/src/libsnd/ccadsr.c
     ../decomp/src/libsnd/cres.c
+    ../decomp/src/libsnd/de_0.c
+    ../decomp/src/libsnd/de_1.c
+    ../decomp/src/libsnd/de_10.c
+    ../decomp/src/libsnd/de_11.c
+    ../decomp/src/libsnd/de_12.c
+    ../decomp/src/libsnd/de_13.c
+    ../decomp/src/libsnd/de_14.c
+    ../decomp/src/libsnd/de_15.c
+    ../decomp/src/libsnd/de_16.c
+    ../decomp/src/libsnd/de_17.c
+    ../decomp/src/libsnd/de_18.c
+    ../decomp/src/libsnd/de_19.c
+    ../decomp/src/libsnd/de_2.c
+    ../decomp/src/libsnd/de_3.c
+    ../decomp/src/libsnd/de_4.c
+    ../decomp/src/libsnd/de_5.c
+    ../decomp/src/libsnd/de_6.c
+    ../decomp/src/libsnd/de_7.c
+    ../decomp/src/libsnd/de_8.c
+    ../decomp/src/libsnd/de_9.c
     ../decomp/src/libsnd/decres.c
+    ../decomp/src/libsnd/midibend.c
+    ../decomp/src/libsnd/midicc.c
+    ../decomp/src/libsnd/midimeta.c
+    ../decomp/src/libsnd/midinote.c
+    ../decomp/src/libsnd/midiprog.c
+    ../decomp/src/libsnd/midiread.c
     ../decomp/src/libsnd/miditime.c
+    ../decomp/src/libsnd/next.c
     ../decomp/src/libsnd/pause.c
     ../decomp/src/libsnd/play.c
     ../decomp/src/libsnd/playmode.c
     ../decomp/src/libsnd/replay.c
     ../decomp/src/libsnd/sepinit.c
+    ../decomp/src/libsnd/seqinit.c
     ../decomp/src/libsnd/sscall.c
     ../decomp/src/libsnd/ssclose.c
     ../decomp/src/libsnd/sscres.c
+    ../decomp/src/libsnd/ssdecres.c
     ../decomp/src/libsnd/ssend.c
     ../decomp/src/libsnd/ssinit.c
     ../decomp/src/libsnd/ssinit_c.c
     ../decomp/src/libsnd/ssinit_h.c
     ../decomp/src/libsnd/ssloop.c
+    ../decomp/src/libsnd/ssmark.c
     ../decomp/src/libsnd/ssopenp.c
     ../decomp/src/libsnd/ssopenpj.c
+    ../decomp/src/libsnd/ssopenq.c
+    ../decomp/src/libsnd/ssopenqj.c
+    ../decomp/src/libsnd/sspause.c
     ../decomp/src/libsnd/ssplay.c
     ../decomp/src/libsnd/ssquit.c
+    ../decomp/src/libsnd/ssreplay.c
     ../decomp/src/libsnd/sssattr.c
+    ../decomp/src/libsnd/sssm.c
     ../decomp/src/libsnd/sssmv.c
     ../decomp/src/libsnd/ssstart.c
     ../decomp/src/libsnd/ssstop.c
     ../decomp/src/libsnd/sssv.c
-    ../decomp/src/libsnd/ssvol.c
     ../decomp/src/libsnd/sstable.c
     ../decomp/src/libsnd/sstick.c
     ../decomp/src/libsnd/sstickcb.c
+    ../decomp/src/libsnd/ssvol.c
     ../decomp/src/libsnd/ut_ako.c
     ../decomp/src/libsnd/ut_autop.c
+    ../decomp/src/libsnd/ut_autov.c
     ../decomp/src/libsnd/ut_cadsr.c
     ../decomp/src/libsnd/ut_gpa.c
     ../decomp/src/libsnd/ut_gva.c
@@ -150,21 +200,34 @@ set(PSYZ_SOURCES
     ../decomp/src/libsnd/ut_rdel.c
     ../decomp/src/libsnd/ut_rdep.c
     ../decomp/src/libsnd/ut_rev.c
+    ../decomp/src/libsnd/ut_rfb.c
     ../decomp/src/libsnd/ut_roff.c
     ../decomp/src/libsnd/ut_ron.c
+    ../decomp/src/libsnd/ut_sva.c
     ../decomp/src/libsnd/ut_vvol.c
-    ../decomp/src/libsnd/vol.c
+    ../decomp/src/libsnd/vm_aloc1.c
     ../decomp/src/libsnd/vm_aloc2.c
     ../decomp/src/libsnd/vm_autop.c
+    ../decomp/src/libsnd/vm_autov.c
     ../decomp/src/libsnd/vm_doff.c
+    ../decomp/src/libsnd/vm_don.c
     ../decomp/src/libsnd/vm_f.c
     ../decomp/src/libsnd/vm_g.c
     ../decomp/src/libsnd/vm_init.c
+    ../decomp/src/libsnd/vm_key.c
     ../decomp/src/libsnd/vm_n2p.c
+    ../decomp/src/libsnd/vm_no1.c
+    ../decomp/src/libsnd/vm_no2.c
     ../decomp/src/libsnd/vm_noff.c
+    ../decomp/src/libsnd/vm_noise.c
     ../decomp/src/libsnd/vm_nowof.c
     ../decomp/src/libsnd/vm_nowon.c
+    ../decomp/src/libsnd/vm_pb.c
+    ../decomp/src/libsnd/vm_prog.c
+    ../decomp/src/libsnd/vm_seq.c
+    ../decomp/src/libsnd/vm_vol.c
     ../decomp/src/libsnd/vm_vsu.c
+    ../decomp/src/libsnd/vol.c
     ../decomp/src/libsnd/vs_mono.c
     ../decomp/src/libsnd/vs_srv.c
     ../decomp/src/libsnd/vs_vab.c
@@ -172,6 +235,7 @@ set(PSYZ_SOURCES
     ../decomp/src/libsnd/vs_vtb.c
     ../decomp/src/libsnd/vs_vtbp.c
     ../decomp/src/libsnd/vs_vtc.c
+    ../decomp/src/libc2/rand.c
     src/psyz/libsnd.c
     src/psyz/libsn.c
     src/psyz/libpress.c

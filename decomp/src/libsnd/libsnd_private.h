@@ -41,54 +41,54 @@ struct Unk {
 };
 
 struct SeqStruct {
-    /* 0x00 */ u8* unk0;
-    /* 0x04 */ u8* read_pos;
+    /* 0x00 */ u8* unk0;     // the read position
+    /* 0x04 */ u8* read_pos; // the first event, where plays restart
     /* 0x08 */ u8* next_sep_pos;
-    /* 0x0C */ u8* loop_pos;
-    /* 0x10 */ u8 unk10;
-    /* 0x11 */ u8 unk11;
+    /* 0x0C */ u8* loop_pos; // NRPN 20's loop start
+    /* 0x10 */ u8 unk10;     // the loop count is set
+    /* 0x11 */ u8 unk11;     // the running status
     /* 0x12 */ u8 channel;
-    /* 0x13 */ u8 unk13;
+    /* 0x13 */ u8 unk13; // RPN LSB (CC100)
     /* 0x14 */ u8 play_mode;
-    /* 0x15 */ u8 unk15;
-    /* 0x16 */ u8 unk16;
-    /* 0x17 */ u8 unk17;
-    /* 0x18 */ u8 unk18;
-    /* 0x19 */ u8 unk19;
-    /* 0x1A */ u8 unk1A;
-    /* 0x1B */ u8 unk1B;
+    /* 0x15 */ u8 unk15; // RPN MSB (CC101)
+    /* 0x16 */ u8 unk16; // NRPN LSB (CC98), the data entry's attribute
+    /* 0x17 */ u8 unk17; // NRPN MSB (CC99)
+    /* 0x18 */ u8 unk18; // a loop is open
+    /* 0x19 */ u8 unk19; // the loop count
+    /* 0x1A */ u8 unk1A; // RPN bytes received
+    /* 0x1B */ u8 unk1B; // NRPN bytes received
     /* 0x1C */ u8 unk1C;
     /* 0x1D */ u8 unk1D;
     /* 0x1E */ u8 unk1E;
     /* 0x1F */ u8 unk1F;
-    /* 0x20 */ u8 unk20;
-    /* 0x21 */ u8 unk21;
-    /* 0x22 */ u8 unk22;
-    /* 0x23 */ u8 unk23;
+    /* 0x20 */ u8 unk20; // plays to make, 0 forever
+    /* 0x21 */ u8 unk21; // plays made
+    /* 0x22 */ u8 unk22; // the next SEP access number, 0xFF none
+    /* 0x23 */ u8 unk23; // the next SEP sequence number
     /* 0x24 */ u16 unk24;
-    /* 0x26 */ u8 unk26;
+    /* 0x26 */ u8 unk26; // the VAB id
     /* 0x27 */ u8 panpot[16];
     /* 0x37 */ u8 programs[16];
-    /* 0x47 */ u8 unk47;
+    /* 0x47 */ u8 unk47; // the last note-on velocity
     /* 0x48 */ short vol_l;
     /* 0x4A */ short vol_r;
     /* 0x4C */ s16 unk4C;
     /* 0x4E */ s16 unk4E;
-    /* 0x50 */ s16 unk50;
-    /* 0x52 */ s16 unk52;
-    /* 0x54 */ s16 unk54;
-    /* 0x56 */ s16 unk56;
+    /* 0x50 */ s16 unk50;  // the resolution, ticks per quarter note
+    /* 0x52 */ s16 unk52;  // calls left to a tick, -1: a call is unk54 ticks
+    /* 0x54 */ s16 unk54;  // ticks a call plays
+    /* 0x56 */ s16 unk56;  // unk54 at the start
     /* 0x58 */ short voll; // maybe unsigned?
     /* 0x5A */ short volr; // maybe unsigned?
     /* 0x5C */ s16 unk5C;
     /* 0x5E */ s16 unk5E;
     /* 0x60 */ short vol[16];
     /* 0x80 */ u32 unk80;
-    /* 0x84 */ s32 unk84;
+    /* 0x84 */ s32 unk84; // the first delta time
     /* 0x88 */ s32 delta_value;
-    /* 0x8C */ s32 unk8c;
-    /* 0x90 */ s32 unk90;
-    /* 0x94 */ u32 unk94;
+    /* 0x8C */ s32 unk8c; // the tempo at the start, beats per minute
+    /* 0x90 */ s32 unk90; // ticks to the next event
+    /* 0x94 */ u32 unk94; // the tempo
     /* 0x98 */ unsigned int flags;
     /* 0x9C */ int v_time_l;
     /* 0xA0 */ int v_time_r;
@@ -283,6 +283,35 @@ int _SsReadDeltaValue(short seq_access_num, short seq_num);
 char _SsVmAlloc(short voice);
 void vmNoiseOn(char voice);
 void vmNoiseOff(char voice);
+int _SsInitSoundSeq(short flag, short vab_id, u_long* addr);
+void _SsGetSeqData(short seq_access_num, short seq_num);
+void _SsSndNextSep(short sep_access_num, short seq_num);
+int _SsVmKeyOn(int seq_sep_no, short vabId, short prog, unsigned short note,
+               unsigned short vol, unsigned short pan);
+int _SsVmKeyOff(int seq_sep_no, short vabId, short prog, unsigned short note);
+int _SsVmSeKeyOn(short vabId, short prog, unsigned short note, int pitch,
+                 unsigned short voll, unsigned short volr);
+int _SsVmSeKeyOff(short vabId, short prog, unsigned short note);
+void _SsVmKeyOffNow(int mode);
+short _SsVmGetSeqLVol(short seq_sep_no);
+short _SsVmGetSeqRVol(short seq_sep_no);
+int _SsVmSetVol(
+    short seq_sep_no, short vabId, short prog, short vol, short pan);
+int _SsVmSetProgVol(short vabId, short prog, unsigned char vol);
+int _SsVmGetProgVol(short vabId, short prog);
+int _SsVmSetProgPan(short vabId, short prog, unsigned char pan);
+int _SsVmGetProgPan(short vabId, short prog);
+short _SsVmPBVoice(short voice, short seq_sep_no, short vabId, short prog,
+                   unsigned short bend);
+int _SsVmPitchBend(
+    short seq_sep_no, short vabId, short prog, unsigned short bend);
+void _SsVmDamperOn(void);
+void _SsVmNoiseOnWithAdsr(
+    short voll, short volr, unsigned short adsr1, unsigned short adsr2);
+void _SsVmNoiseOff(void);
+void _SsVmNoiseOn(short voll, short volr);
+void _SsUtBuildADSR(struct Unk* adsr, u16* adsr1, u16* adsr2);
+unsigned short note2pitch(void);
 unsigned short note2pitch2(unsigned short note, unsigned short fine);
 void _SsVmKeyOnNow(unsigned short vagCount, unsigned short pitch);
 int _SsVmVSetUp(short vabId, short prog);
@@ -293,7 +322,7 @@ void _SsSetProgramChange(short a0, short a1, unsigned char a2);
 void _SsGetMetaEvent(short a0, short a1, unsigned char a2);
 void _SsSetPitchBend(short a0, short a1);
 void _SsSetControlChange(short a0, short a1, unsigned char a2);
-void _SsContBankChange(short a0, short a1);
+void _SsContBankChange(short a0, short a1, unsigned char a2);
 void _SsContDataEntry(short a0, short a1, unsigned char a2);
 void _SsContMainVol(short a0, short a1, unsigned char a2);
 void _SsContPanpot(short a0, short a1, unsigned char a2);
