@@ -457,7 +457,24 @@ end:
 }
 
 #define XA_DECODED_MAX_FRAMES 4032            // 18 blocks * 4 sub * 28 samples
-#define XA_STEP_Q16 ((37800u << 16) / 44100u) // 56173
+#define XA_ZIGZAG_TAPS 29
+
+// The CD decoder resamples 37800Hz to 44100Hz with a zigzag filter: every six
+// input samples it outputs seven, each the sum of the last 29 inputs weighted
+// by one of these tables, shifted right by 15. The tables' gain is about 0.906,
+// so XA plays ~0.86dB below its decoded level, as on the console. From
+// psx-spx, "CDROM XA Audio ADPCM Compression".
+// clang-format off
+static const short xa_zigzag_table[7][XA_ZIGZAG_TAPS] = {
+    {0, 0, 0, 0, 0, -2, 10, -34, 65, -84, 52, 9, -266, 1024, -2680, 9036, 26516, -6016, 3021, -1571, 848, -365, 107, 10, -16, 17, -8, 3, -1},
+    {0, 0, 0, -2, 0, 3, -19, 60, -75, 162, -227, 306, -67, -615, 3229, 29883, -4532, 2488, -1471, 882, -424, 166, -27, 5, 6, -8, 3, -1, 0},
+    {0, 0, -1, 3, -2, -5, 31, -74, 179, -402, 689, -926, 1272, -1446, 31033, -1446, 1272, -926, 689, -402, 179, -74, 31, -5, -2, 3, -1, 0, 0},
+    {0, -1, 3, -8, 6, 5, -27, 166, -424, 882, -1471, 2488, -4532, 29883, 3229, -615, -67, 306, -227, 162, -75, 60, -19, 3, 0, -2, 0, 0, 0},
+    {-1, 3, -8, 17, -16, 10, 107, -365, 848, -1571, 3021, -6016, 26516, 9036, -2680, 1024, -266, 9, 52, -84, 65, -34, 10, -1, 0, 1, 0, 0, 0},
+    {2, -8, 16, -35, 43, 26, -235, 635, -1352, 2810, -5882, 21472, 15367, -4681, 2062, -839, 347, -68, -23, 70, -35, 17, -5, 0, 0, 0, 0, 0, 0},
+    {-5, 17, -35, 70, -23, -68, 347, -839, 2062, -4681, 15367, 21472, -5882, 2810, -1352, 635, -235, 26, 43, -35, 16, -8, 2, 0, 0, 0, 0, 0, 0},
+};
+// clang-format on
 
 static struct {
     short decoded[XA_DECODED_MAX_FRAMES * 2];
@@ -468,9 +485,10 @@ static struct {
     int decoded_pos;
     int hist_l_old, hist_l_older;
     int hist_r_old, hist_r_older;
-    // Hermite ring: index [0]=oldest .. [3]=newest per channel
-    short rh_l[4], rh_r[4];
-    unsigned int phase; // 16.16 fractional position into the input stream
+    short ring[2][32];  // the last 37800Hz input samples per channel
+    unsigned ring_pos;  // where the next input sample goes
+    short out[7 * 2];   // the 44100Hz samples of the last six inputs
+    int out_left;       // how many of out[] are still to be handed out
     int cur_abs_sector; // absolute last sector used, for CdlGetlocL
 } xa;
 
@@ -479,9 +497,9 @@ static void xa_reset_stream(void) {
     xa.decoded_pos = 0;
     xa.hist_l_old = xa.hist_l_older = 0;
     xa.hist_r_old = xa.hist_r_older = 0;
-    memset(xa.rh_l, 0, sizeof(xa.rh_l));
-    memset(xa.rh_r, 0, sizeof(xa.rh_r));
-    xa.phase = 0;
+    memset(xa.ring, 0, sizeof(xa.ring));
+    xa.ring_pos = 0;
+    xa.out_left = 0;
 }
 
 static int xa_sector_matches(unsigned char file, unsigned char channel) {
@@ -591,7 +609,7 @@ static int xa_read_and_decode_sector(void) {
     }
 }
 
-// Pull next 37800 Hz stereo input frame into the Hermite ring buffers.
+// Push the next 37800 Hz stereo input frame into the zigzag rings.
 // Returns 1 on success, 0 if stream ended.
 static int xa_advance_input(void) {
     if (xa.decoded_pos >= xa.decoded_count) {
@@ -599,36 +617,19 @@ static int xa_advance_input(void) {
             return 0;
         }
     }
-    short l = xa.decoded[xa.decoded_pos * 2 + 0];
-    short r = xa.decoded[xa.decoded_pos * 2 + 1];
+    xa.ring[0][xa.ring_pos & 31] = xa.decoded[xa.decoded_pos * 2 + 0];
+    xa.ring[1][xa.ring_pos & 31] = xa.decoded[xa.decoded_pos * 2 + 1];
     xa.decoded_pos++;
-    xa.rh_l[0] = xa.rh_l[1];
-    xa.rh_l[1] = xa.rh_l[2];
-    xa.rh_l[2] = xa.rh_l[3];
-    xa.rh_l[3] = l;
-    xa.rh_r[0] = xa.rh_r[1];
-    xa.rh_r[1] = xa.rh_r[2];
-    xa.rh_r[2] = xa.rh_r[3];
-    xa.rh_r[3] = r;
+    xa.ring_pos++;
     return 1;
 }
 
-// 4-point Hermite (Catmull-Rom-like) at fractional position frac in [0,1).
-// frac is given as Q1.16 (only low 16 bits used).
-// TODO !!! slown down considerably on hardware without float processing unit
-static short hermite4(
-    short ym1, short y0, short y1, short y2, unsigned int frac_q16) {
-    // Use floating math here for correctness; this is run-once per output
-    // sample and is still very cheap. Embedded targets get clean output.
-    float x = (float)(frac_q16 & 0xFFFF) / 65536.0f;
-    float c0 = (float)y0;
-    float c1 = 0.5f * (float)(y1 - ym1);
-    float c2 =
-        (float)ym1 - 2.5f * (float)y0 + 2.0f * (float)y1 - 0.5f * (float)y2;
-    float c3 = 0.5f * (float)(y2 - ym1) + 1.5f * (float)(y0 - y1);
-    float v = ((c3 * x + c2) * x + c1) * x + c0;
-    int iv = (int)(v + (v >= 0 ? 0.5f : -0.5f));
-    return clamp16(iv);
+static short xa_zigzag(const short* ring, unsigned pos, const short* table) {
+    int sum = 0;
+    for (int i = 1; i <= XA_ZIGZAG_TAPS; i++) {
+        sum += ring[(pos - i) & 31] * table[i - 1];
+    }
+    return clamp16(sum >> 15);
 }
 
 static size_t xa_pull_samples(short* buf, size_t max_frames) {
@@ -638,35 +639,30 @@ static size_t xa_pull_samples(short* buf, size_t max_frames) {
     if (!is_playing || !track_file || !xa.active) {
         goto end;
     }
-    // Prime Hermite ring on first call so we have y0..y2 valid.
-    while (xa.rh_l[3] == 0 && xa.rh_l[2] == 0 && xa.rh_l[1] == 0 &&
-           xa.decoded_pos == 0 && xa.decoded_count == 0) {
-        if (!xa_advance_input()) {
-            hit_eof = 1;
-            goto end;
-        }
-        if (xa.decoded_count > 0)
-            break;
-    }
     while (written < max_frames) {
-        // Advance input as many times as needed to get phase < 1.0.
-        while (xa.phase >= 0x10000) {
-            if (!xa_advance_input()) {
-                hit_eof = 1;
-                goto end;
+        if (xa.out_left == 0) {
+            for (int i = 0; i < 6; i++) {
+                if (!xa_advance_input()) {
+                    hit_eof = 1;
+                    goto end;
+                }
             }
-            xa.phase -= 0x10000;
+            for (int i = 0; i < 7; i++) {
+                xa.out[i * 2 + 0] =
+                    xa_zigzag(xa.ring[0], xa.ring_pos, xa_zigzag_table[i]);
+                xa.out[i * 2 + 1] =
+                    xa_zigzag(xa.ring[1], xa.ring_pos, xa_zigzag_table[i]);
+            }
+            xa.out_left = 7;
         }
         if (is_muted) {
             buf[written * 2 + 0] = 0;
             buf[written * 2 + 1] = 0;
         } else {
-            buf[written * 2 + 0] = hermite4(
-                xa.rh_l[0], xa.rh_l[1], xa.rh_l[2], xa.rh_l[3], xa.phase);
-            buf[written * 2 + 1] = hermite4(
-                xa.rh_r[0], xa.rh_r[1], xa.rh_r[2], xa.rh_r[3], xa.phase);
+            buf[written * 2 + 0] = xa.out[(7 - xa.out_left) * 2 + 0];
+            buf[written * 2 + 1] = xa.out[(7 - xa.out_left) * 2 + 1];
         }
-        xa.phase += XA_STEP_Q16;
+        xa.out_left--;
         written++;
     }
 end:

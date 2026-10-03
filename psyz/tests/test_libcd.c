@@ -675,8 +675,7 @@ static void mount_bin_cue_pair(
 
 // Build a deterministic raw 2352-byte MODE2/2352 XA Form2 sector.
 // All ADPCM blocks use shift_in=0 (so shift=12) and filter=0, and every
-// nibble is 0x1, so each decoded sample = (1 << 12) = 0x1000 (DC). After
-// CD volume (0x3FFF) and main volume (0x3FFF) this comes out as 0x07FE.
+// nibble is 0x1, so each decoded sample = (1 << 12) = 0x1000 (DC).
 static void build_xa_sector(unsigned char* sector, int sector_idx) {
     // subheader: file=1, channel=0, submode=0x64 (audio|RT|Form2), CI=0x01
     // (stereo, 37800Hz, 4-bit ADPCM)
@@ -810,9 +809,14 @@ ZTEST(libcd_playback, xa_playback) {
     // 44100 Hz. 16 sectors -> ~37632 output frames.
     const int kSectors = 16;
     const int frame_count = 37632;
-    // Skip the first 64 frames where the Hermite ring is filling and the
-    // resampler is settling toward the DC plateau.
+    // Skip the first 64 frames, while the zigzag filter's 29 taps fill.
     const int kSettle = 64;
+    // The zigzag filter turns DC 0x1000 into a 7-sample cycle, one value per
+    // table (0x1000 * the table's sum >> 15), then CD volume (0x3FFF >> 15)
+    // and main volume (0x3FFF >> 14) give these.
+    static const short kCycle[7] = {
+        0x073D, 0x0740, 0x073C, 0x0740, 0x073D, 0x073F, 0x073F};
+    int phase;
     unsigned short* sample;
     unsigned char* raw;
     u_char param[8];
@@ -855,17 +859,28 @@ ZTEST(libcd_playback, xa_playback) {
     // Reverse Psyz_AudioLock
     Psyz_AudioUnlock();
 
-    // Each XA sample decodes to 0x1000 -> after cd_vol (0x3FFF >> 15) and
-    // main_vol (0x3FFF >> 14) the steady-state output is 0x07FE per channel.
+    // Find where in the cycle kSettle falls, then expect the cycle.
+    for (phase = 0; phase < 7; phase++) {
+        for (i = 0; i < 7; i++) {
+            if (out[(kSettle + i) * 2] != kCycle[(phase + i) % 7]) {
+                break;
+            }
+        }
+        if (i == 7) {
+            break;
+        }
+    }
+    zassert_s32_ne(7, phase);
     for (i = kSettle; i < frame_count; ++i) {
-        if (out[i * 2 + 0] != 0x07FE) {
+        short want = kCycle[(phase + i - kSettle) % 7];
+        if (out[i * 2 + 0] != want) {
             zprintf("frame %d left channel unexpected value\n", i);
         }
-        zassert_s16_eq(0x07FE, out[i * 2 + 0]);
-        if (out[i * 2 + 1] != 0x07FE) {
+        zassert_s16_eq(want, out[i * 2 + 0]);
+        if (out[i * 2 + 1] != want) {
             zprintf("frame %d right channel unexpected value\n", i);
         }
-        zassert_s16_eq(0x07FE, out[i * 2 + 1]);
+        zassert_s16_eq(want, out[i * 2 + 1]);
     }
 }
 
