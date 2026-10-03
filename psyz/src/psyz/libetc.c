@@ -96,11 +96,33 @@ static struct {
 
 static unsigned set_counter = 0;
 
-void* InterruptCallback(int arg0, void (*cb)()) {
-    if (arg0 < 0 || arg0 >= 0x100) {
+// The handler slot of an interrupt psyz raises: 0 is VBLANK, which RCntCNT3
+// counts, and 6 is root counter 2. NULL for the others.
+static void (**interrupt_handler(int irq))(void) {
+    switch (irq) {
+    case 0:
+        return &rcnt3.handler;
+    case 6:
+        return &rcnt2.handler;
+    }
+    return NULL;
+}
+
+// Sets the handler of interrupt irq and returns the previous one; NULL
+// removes it. For other interrupt numbers the handler goes to the counter
+// SetRCnt last programmed, if any.
+void* InterruptCallback(int irq, void (*cb)()) {
+    void (**slot)(void) = interrupt_handler(irq);
+    void (*prev)(void) = NULL;
+
+    if (irq < 0 || irq >= 0x100) {
         return NULL;
     }
-    void (*prev)(void) = NULL;
+    if (slot != NULL) {
+        prev = *slot;
+        *slot = cb;
+        return prev;
+    }
     switch (set_counter) {
     case 2: // RCntCNT2
         prev = rcnt2.handler;
