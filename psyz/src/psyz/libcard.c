@@ -1,11 +1,21 @@
 #include <psyz.h>
 #include <libapi.h>
+#include <kernel.h>
 #include <psyz/log.h>
 #include <string.h>
 #include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
 #endif
+
+// The cards plugged in: one in each port (bu00, bu10), none on a multi tap.
+// A card is "new" until something is written to it, as after power-on:
+// _card_info answers EvSpNEW, and a game confirms the card with _card_clear.
+// _bu_init leaves both known: on DuckStation, LSD: Dream Emulator's first
+// _card_info after _bu_init answers a known card, not a new one.
+static unsigned char card_confirmed[2];
+
+static int card_present(long chan) { return (chan & 15) == 0; }
 
 // 1:valid, 0:invalid
 static inline int validate_chan(long chan) {
@@ -22,8 +32,10 @@ static inline int validate_chan(long chan) {
 
 // Creates the directories that hold the two memory cards, where
 // Psyz_AdjustPath maps "bu00:" and "bu10:" (so a game's Psyz_AdjustPathCB
-// can put them anywhere). The parent directory must exist.
+// can put them anywhere). The parent directory must exist. Both cards are
+// known afterwards (card_confirmed).
 void _bu_init(void) {
+    card_confirmed[0] = card_confirmed[1] = 1;
     static const char* const devices[] = {"bu00:", "bu10:"};
     for (size_t i = 0; i < sizeof(devices) / sizeof(*devices); i++) {
         char dir[0x100];
@@ -47,37 +59,30 @@ long _card_auto(long val) {
 
 long _card_info(long chan) {
     if (!validate_chan(chan)) {
-        // TODO: unset SwCARD/EvSpIOE
-        // TODO: unset SwCARD/EvSpTIMOUT
-        // TODO: unset SwCARD/EvSpNEW
-        // TODO: set SwCARD/EvSpERROR
         return 0;
     }
-    // TODO: set SwCARD/EvSpIOE
-    // TODO: unset SwCARD/EvSpTIMOUT
-    // TODO: unset SwCARD/EvSpNEW
-    // TODO: unset SwCARD/EvSpERROR
-    NOT_IMPLEMENTED;
+    if (!card_present(chan)) {
+        DeliverEvent(SwCARD, EvSpTIMOUT);
+    } else if (!card_confirmed[chan >> 4]) {
+        DeliverEvent(SwCARD, EvSpNEW);
+    } else {
+        DeliverEvent(SwCARD, EvSpIOE);
+    }
     return 1;
 }
 
+// Every card present is formatted: its directory exists (_bu_init).
 long _card_load(long chan) {
     if (!validate_chan(chan)) {
-        // TODO: unset SwCARD/EvSpIOE
-        // TODO: unset SwCARD/EvSpTIMOUT
-        // TODO: unset SwCARD/EvSpNEW
-        // TODO: set SwCARD/EvSpERROR
         return 0;
     }
-    // TODO: set SwCARD/EvSpIOE
-    // TODO: unset SwCARD/EvSpTIMOUT
-    // TODO: unset SwCARD/EvSpNEW
-    // TODO: unset SwCARD/EvSpERROR
-    NOT_IMPLEMENTED;
+    DeliverEvent(SwCARD, card_present(chan) ? EvSpIOE : EvSpTIMOUT);
     return 1;
 }
 
-void _new_card(void) { NOT_IMPLEMENTED; }
+// Keeps the next _card_read or _card_write from answering EvSpNEW, which on
+// the host they never do.
+void _new_card(void) {}
 
 long _card_status(long drv) {
     NOT_IMPLEMENTED;
@@ -150,6 +155,10 @@ long _card_sector_write(long chan, long block, unsigned char* buf) {
 }
 
 long _card_write(long chan, long block, unsigned char* buf) {
+    // no sectors to write on the host, but the write confirms the card
+    if (validate_chan(chan) && card_present(chan)) {
+        card_confirmed[chan >> 4] = 1;
+    }
     NOT_IMPLEMENTED;
     return 0;
 }

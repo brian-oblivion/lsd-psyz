@@ -170,6 +170,11 @@ void ChangeClearPAD(long a) { NOT_IMPLEMENTED; }
 
 static unsigned long event_first_empty = 0;
 static struct EvCB events[0x100] = {0};
+
+// HwCARD events are not delivered by anything yet: they keep the answer
+// OpenEvent gave them (end of I/O, no error), whatever is tested or enabled.
+static int is_fixed_event(const struct EvCB* e) { return e->desc == HwCARD; }
+
 static long GetFirstFreeEvent() {
     // event_first_empty brings the function to O(1) in an optimistic scenario,
     // but it does not guarantee it always points to an empty event
@@ -207,14 +212,14 @@ long OpenEvent(unsigned long desc, long spec, long mode, long (*func)()) {
     int supported = 1;
     switch (desc) {
     case SwCARD:
+        // libcard delivers these (_card_info, _card_load), so they start
+        // disabled, as on the console, until EnableEvent
         switch (spec) {
-        case EvSpIOE: // always report memory card as connected
-            e->status = 1;
-            break;
-        case EvSpERROR:  // never errors
-        case EvSpTIMOUT: // never report memory card as disconnected
-        case EvSpNEW:    // never block writing after connection
-            e->status = 0;
+        case EvSpIOE:
+        case EvSpERROR:
+        case EvSpTIMOUT:
+        case EvSpNEW:
+            e->status = EvStWAIT;
             break;
         default:
             supported = 0;
@@ -222,6 +227,7 @@ long OpenEvent(unsigned long desc, long spec, long mode, long (*func)()) {
         }
         break;
     case HwCARD:
+        // fixed answers, which TestEvent does not reset (is_fixed_event)
         switch (spec) {
         case EvSpIOE: // always report end of IO
             e->status = 1;
@@ -241,7 +247,7 @@ long OpenEvent(unsigned long desc, long spec, long mode, long (*func)()) {
         break;
     }
     if (!supported) {
-        e->status = 0;
+        e->status = EvStWAIT;
         WARNF("unsupported spec:%08X, desc:%04X, mode:%04X", spec, desc, mode);
     }
     event_first_empty = id + 1;
@@ -266,6 +272,10 @@ long WaitEvent(unsigned long event) {
         return 0;
     }
     // never waits
+    if (!is_fixed_event(&events[event]) &&
+        events[event].status == EvStALREADY) {
+        events[event].status = EvStACTIVE;
+    }
     return 1;
 }
 long EnableEvent(unsigned long event) {
@@ -273,7 +283,9 @@ long EnableEvent(unsigned long event) {
         WARNF("invalid event ID %d", event);
         return 0;
     }
-    NOT_IMPLEMENTED;
+    if (!is_fixed_event(&events[event]) && events[event].status == EvStWAIT) {
+        events[event].status = EvStACTIVE;
+    }
     return 1;
 }
 long DisableEvent(unsigned long event) {
@@ -281,7 +293,9 @@ long DisableEvent(unsigned long event) {
         WARNF("invalid event ID %d", event);
         return 0;
     }
-    NOT_IMPLEMENTED;
+    if (!is_fixed_event(&events[event])) {
+        events[event].status = EvStWAIT;
+    }
     return 1;
 }
 long TestEvent(unsigned long event) {
@@ -289,15 +303,46 @@ long TestEvent(unsigned long event) {
         WARNF("invalid event ID %d", event);
         return 0;
     }
-    return events[event].status;
+    struct EvCB* e = &events[event];
+    if (is_fixed_event(e)) {
+        return e->status;
+    }
+    if (e->status == EvStALREADY) {
+        e->status = EvStACTIVE;
+        return 1;
+    }
+    return 0;
 }
 
 void PS1_EnterCriticalSection(void) { NOT_IMPLEMENTED; }
 void PS1_ExitCriticalSection(void) { NOT_IMPLEMENTED; }
 
-void DeliverEvent(unsigned ev1, unsigned ev2) { NOT_IMPLEMENTED; }
+void DeliverEvent(unsigned ev1, unsigned ev2) {
+    for (unsigned long i = 0; i < LEN(events); i++) {
+        struct EvCB* e = &events[i];
+        if (e->desc != ev1 || (unsigned)e->spec != ev2 || is_fixed_event(e) ||
+            e->status != EvStACTIVE) {
+            continue;
+        }
+        if (e->mode == EvMdINTR) {
+            if (e->FHandler) {
+                e->FHandler();
+            }
+        } else {
+            e->status = EvStALREADY;
+        }
+    }
+}
 
-void UnDeliverEvent(unsigned ev1, unsigned ev2) { NOT_IMPLEMENTED; }
+void UnDeliverEvent(unsigned ev1, unsigned ev2) {
+    for (unsigned long i = 0; i < LEN(events); i++) {
+        struct EvCB* e = &events[i];
+        if (e->desc == ev1 && (unsigned)e->spec == ev2 && !is_fixed_event(e) &&
+            e->mode == EvMdNOINTR && e->status == EvStALREADY) {
+            e->status = EvStACTIVE;
+        }
+    }
+}
 
 void SystemError(char c, long n) {
     NOT_IMPLEMENTED;

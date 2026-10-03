@@ -259,6 +259,73 @@ ZTEST(truncation, nextfile_truncates_long_filename) {
     zexpect_u32_eq(19, strlen(d[1].name));
 }
 
+// The answer _card_info or _card_load gave through its SwCARD events: the
+// spec of the one event delivered, 0 for none, -1 for more than one.
+static long card_answer(long ev[4], const long spec[4]) {
+    long answer = 0;
+    for (int i = 0; i < 4; i++) {
+        if (TestEvent(ev[i])) {
+            answer = answer ? -1 : spec[i];
+        }
+    }
+    return answer;
+}
+
+// Runs before anything calls _bu_init, which confirms both cards.
+ZTEST(card, info_reports_a_new_card_until_it_is_written) {
+    zskip_targets("ps1");
+    static const long spec[4] = {EvSpIOE, EvSpERROR, EvSpTIMOUT, EvSpNEW};
+    long ev[4];
+    for (int i = 0; i < 4; i++) {
+        ev[i] = OpenEvent(SwCARD, spec[i], EvMdNOINTR, NULL);
+        zassert_s32_ne(-1, ev[i]);
+    }
+
+    // disabled events are not delivered
+    zexpect_s32_eq(1, _card_info(0x00));
+    zexpect_s32_eq(0, card_answer(ev, spec));
+
+    for (int i = 0; i < 4; i++) {
+        EnableEvent(ev[i]);
+    }
+    zexpect_s32_eq(1, _card_info(0x00));
+    zexpect_s32_eq(EvSpNEW, card_answer(ev, spec));
+    zexpect_s32_eq(0, card_answer(ev, spec)); // TestEvent resets it
+    zexpect_s32_eq(1, _card_info(0x00));
+    zexpect_s32_eq(EvSpNEW, card_answer(ev, spec));
+
+    _card_clear(0x00);
+    zexpect_s32_eq(1, _card_info(0x00));
+    zexpect_s32_eq(EvSpIOE, card_answer(ev, spec));
+    zexpect_s32_eq(1, _card_load(0x00));
+    zexpect_s32_eq(EvSpIOE, card_answer(ev, spec));
+
+    // the other port's card is new until it is written too
+    zexpect_s32_eq(1, _card_info(0x10));
+    zexpect_s32_eq(EvSpNEW, card_answer(ev, spec));
+
+    // nothing on a multi tap
+    zexpect_s32_eq(1, _card_info(0x01));
+    zexpect_s32_eq(EvSpTIMOUT, card_answer(ev, spec));
+
+    for (int i = 0; i < 4; i++) {
+        DisableEvent(ev[i]);
+    }
+    zexpect_s32_eq(1, _card_info(0x00));
+    zexpect_s32_eq(0, card_answer(ev, spec));
+    for (int i = 0; i < 4; i++) {
+        EnableEvent(ev[i]);
+    }
+    _bu_init(); // makes bu00/ and bu10/ here
+    rmdir("bu00");
+    rmdir("bu10");
+    zexpect_s32_eq(1, _card_info(0x10));
+    zexpect_s32_eq(EvSpIOE, card_answer(ev, spec));
+    for (int i = 0; i < 4; i++) {
+        CloseEvent(ev[i]);
+    }
+}
+
 static int test_callback_cards_elsewhere(
     char* dst, const char* src, int maxlen) {
     if (strncmp(src, "bu", 2) == 0 && src[4] == ':') {
