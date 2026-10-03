@@ -199,6 +199,10 @@ static int decode_block(float out[64], const u_char* iq) {
     return 1;
 }
 
+// 15-bit output rounds each component to 5 bits; truncating left movies a
+// half step (~4/255) darker than on the console.
+static u_short to5(int v) { return v >= 0xF8 ? 31 : (v + 4) >> 3; }
+
 static int clamp8(float v) {
     int i = (int)lrintf(v);
     return i < 0 ? 0 : i > 255 ? 255 : i;
@@ -233,7 +237,7 @@ static int decode_macroblock(void* dst) {
                 p[2] = b;
             } else {
                 ((u_short*)dst)[py * 16 + px] =
-                    bit15 | (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10);
+                    bit15 | to5(r) | (to5(g) << 5) | (to5(b) << 10);
             }
         }
     }
