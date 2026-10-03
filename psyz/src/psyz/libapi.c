@@ -167,6 +167,10 @@ long ReadInitPadFlag(void) {
 
 void ChangeClearPAD(long a) { NOT_IMPLEMENTED; }
 
+// The console's 2 MB limit (or 8 MB on a development board) does not exist
+// on the host: nothing to change.
+void SetMem(unsigned long n) {}
+
 static unsigned long event_first_empty = 0;
 static struct EvCB events[0x100] = {0};
 static long GetFirstFreeEvent() {
