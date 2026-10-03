@@ -285,3 +285,24 @@ ZTEST(libetc, scratchpad_words) {
     zexpect_u32_eq(0x12345678, *(unsigned int*)((char*)base + 4));
     zexpect_s32_eq(-1, *(int*)((char*)base + 1020));
 }
+
+static int test_callback_cards_elsewhere(
+    char* dst, const char* src, int maxlen) {
+    if (strncmp(src, "bu", 2) == 0 && src[4] == ':') {
+        snprintf(dst, maxlen, "bu_elsewhere" PATH_SEP "%.4s" PATH_SEP "%s", src,
+                 src + 5);
+        return (int)strlen(dst);
+    }
+    return -1;
+}
+
+ZTEST(bu_init, creates_the_mapped_card_directories) {
+    zskip_targets("ps1");
+    mkdir("bu_elsewhere", 0755);
+    Psyz_AdjustPathCB(test_callback_cards_elsewhere);
+    _bu_init();
+    Psyz_AdjustPathCB(NULL);
+    zexpect_s32_eq(0, rmdir("bu_elsewhere" PATH_SEP "bu00"));
+    zexpect_s32_eq(0, rmdir("bu_elsewhere" PATH_SEP "bu10"));
+    zexpect_s32_eq(0, rmdir("bu_elsewhere"));
+}
