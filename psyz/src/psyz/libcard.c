@@ -1,7 +1,11 @@
 #include <psyz.h>
 #include <libapi.h>
 #include <psyz/log.h>
+#include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 // 1:valid, 0:invalid
 static inline int validate_chan(long chan) {
@@ -16,16 +20,24 @@ static inline int validate_chan(long chan) {
     return 1;
 }
 
+// Creates the directories that hold the two memory cards, where
+// Psyz_AdjustPath maps "bu00:" and "bu10:" (so a game's Psyz_AdjustPathCB
+// can put them anywhere). The parent directory must exist.
 void _bu_init(void) {
-#ifdef _MSC_VER
-    NOT_IMPLEMENTED;
-#elif __MINGW32__
-    mkdir("bu00");
-    mkdir("bu10");
+    static const char* const devices[] = {"bu00:", "bu10:"};
+    for (size_t i = 0; i < sizeof(devices) / sizeof(*devices); i++) {
+        char dir[0x100];
+        Psyz_AdjustPath(dir, devices[i], sizeof(dir));
+        size_t len = strlen(dir);
+        while (len > 1 && (dir[len - 1] == '/' || dir[len - 1] == '\\')) {
+            dir[--len] = '\0';
+        }
+#ifdef _WIN32
+        _mkdir(dir);
 #else
-    mkdir("bu00", 0755);
-    mkdir("bu10", 0755);
+        mkdir(dir, 0755);
 #endif
+    }
 }
 
 long _card_auto(long val) {
