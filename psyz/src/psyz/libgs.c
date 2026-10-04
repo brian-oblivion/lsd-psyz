@@ -514,27 +514,24 @@ void GsSortBg(GsBG* bg, GsOT* otp, unsigned short pri) {
 
 // The TMD's object table follows its flags word and object count; every
 // object's vertex, normal and primitive offsets are relative to the table.
-// Flag bit 0 says they are mapped to addresses already. The words are 32
-// bits, so the TMD must sit in the low 4 GB on a 64-bit host.
+// Flag bit 0 says they are mapped already. They are mapped to offsets from
+// the object's own entry, not to addresses as on the console: an address
+// does not fit the file's 32-bit words on a 64-bit host (GsTMDAddr).
 void GsMapModelingData(u_long* base) {
     u32* p = (u32*)base;
     u32 n;
     u32* obj;
-    uintptr_t table;
     if (p[0] & 1) {
         return;
     }
     p[0] |= 1;
     n = p[1];
     obj = p + 2;
-    table = (uintptr_t)obj;
-    if ((u32)table != table) {
-        ERRORF("TMD at %p is out of the 32-bit range", (void*)base);
-    }
     for (u32 i = 0; i < n; i++, obj += 7) {
-        obj[0] += (u32)table; // vertices
-        obj[4] += (u32)table; // primitives
-        obj[2] += (u32)table; // normals
+        const u32 entry = i * 7 * sizeof(u32); // the entry's offset in the table
+        obj[0] -= entry; // vertices
+        obj[2] -= entry; // normals
+        obj[4] -= entry; // primitives
     }
 }
 
@@ -577,7 +574,7 @@ static int gs_tmd_prim_size(int mode, int flag) {
 // each run gets the run's length in its olen/ilen halfword.
 void GsLinkObject4(u_long tmd_base, GsDOBJ2* objp, int n) {
     u32* obj = (u32*)tmd_base + n * 7;
-    u8* p = (u8*)(uintptr_t)obj[4];
+    u8* p = GsTMDAddr(obj, 4);
     u32 nprims = obj[5];
     u8* run = p;
     u32 count = 0;

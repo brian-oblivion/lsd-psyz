@@ -113,55 +113,48 @@ ZTEST_SETUP(gs3d) {
 // 4096 * 1000 / |1000|, through SquareRoot0's table, as libgs computes it
 static int gs_unit_1000(void) { return 4096000 / SquareRoot0(1000 * 1000); }
 
-// A mapped TMD holds addresses in 32-bit words: only where data addresses
-// fit, as on the console and 32-bit hosts.
-static int gs_tmd_mappable(const void* p) {
-    return (uintptr_t)p == (u32)(uintptr_t)p;
-}
-
-// A TMD's object table: offsets become addresses, once (flag bit 0).
+// A TMD's object table: offsets from the table become offsets from each
+// object's entry, once (flag bit 0), and resolve with GsTMDAddr.
 ZTEST(gs3d, map_modeling_data_relocates_once) {
-    static u32 tmd[2 + 7];
-    u32 table = (u32)(uintptr_t)&tmd[2];
-    if (!gs_tmd_mappable(tmd)) {
-        zskip("data above 4 GB");
-    }
+    static u32 tmd[2 + 7 * 2];
+    u8* table = (u8*)&tmd[2];
     memset(tmd, 0, sizeof(tmd));
-    tmd[1] = 1;              // one object
-    tmd[2 + 0] = 0x100;      // vertices
-    tmd[2 + 2] = 0x200;      // normals
-    tmd[2 + 4] = 0x300;      // primitives
-    tmd[2 + 5] = 7;          // primitive count, untouched
+    tmd[1] = 2;                  // two objects
+    tmd[2 + 0] = 0x100;          // vertices
+    tmd[2 + 2] = 0x200;          // normals
+    tmd[2 + 4] = 0x300;          // primitives
+    tmd[2 + 5] = 7;              // primitive count, untouched
+    tmd[2 + 7 + 0] = 0x400;      // the second object's vertices
     GsMapModelingData((u_long*)tmd);
     zexpect_u32_eq(1, tmd[0]);
-    zexpect_u32_eq(table + 0x100, tmd[2 + 0]);
-    zexpect_u32_eq(table + 0x200, tmd[2 + 2]);
-    zexpect_u32_eq(table + 0x300, tmd[2 + 4]);
+    zexpect_u32_eq(0x100, tmd[2 + 0]);
+    zexpect_u32_eq(0x300, tmd[2 + 4]);
     zexpect_u32_eq(7, tmd[2 + 5]);
+    zexpect_u32_eq(0x400 - 7 * 4, tmd[2 + 7 + 0]);
+    zexpect_ptr_eq(table + 0x200, GsTMDAddr(&tmd[2], 2));
+    zexpect_ptr_eq(table + 0x400, GsTMDAddr(&tmd[2 + 7], 0));
     GsMapModelingData((u_long*)tmd);
-    zexpect_u32_eq(table + 0x100, tmd[2 + 0]);
+    zexpect_u32_eq(0x400 - 7 * 4, tmd[2 + 7 + 0]);
 }
 
 // Runs of one primitive mode: the first of each run gets the run's length
 // in its first halfword. F3 is 0x10 bytes, GT4 0x24.
 ZTEST(gs3d, link_object4_counts_mode_runs) {
-    static u32 prims[(0x10 * 3 + 0x24) / 4];
-    static u32 obj[7];
+    static struct {
+        u32 obj[7 * 2];
+        u32 prims[(0x10 * 3 + 0x24) / 4];
+    } tmd;
     GsDOBJ2 dobj;
-    u8* p = (u8*)prims;
-    if (!gs_tmd_mappable(prims)) {
-        zskip("data above 4 GB");
-    }
-    memset(prims, 0, sizeof(prims));
+    u8* p = (u8*)tmd.prims;
+    memset(&tmd, 0, sizeof(tmd));
     p[0x00 + 3] = 0x20;
     p[0x10 + 3] = 0x20;
     p[0x20 + 3] = 0x3C;
     p[0x44 + 3] = 0x20;
-    memset(obj, 0, sizeof(obj));
-    obj[4] = (u32)(uintptr_t)prims;
-    obj[5] = 4;
-    GsLinkObject4((u_long)(uintptr_t)obj - 7 * 4, &dobj, 1);
-    zexpect_ptr_eq(obj, dobj.tmd);
+    tmd.obj[7 + 4] = (u32)((u8*)tmd.prims - (u8*)&tmd.obj[7]); // mapped
+    tmd.obj[7 + 5] = 4;
+    GsLinkObject4((u_long)tmd.obj, &dobj, 1);
+    zexpect_ptr_eq(&tmd.obj[7], dobj.tmd);
     zexpect_u16_eq(2, *(u16*)(p + 0x00));
     zexpect_u16_eq(0, *(u16*)(p + 0x10));
     zexpect_u16_eq(1, *(u16*)(p + 0x20));
