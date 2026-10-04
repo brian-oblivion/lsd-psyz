@@ -637,6 +637,11 @@ void MyPadInit(int mode) {
     UpdatePlatformTouchControls();
 }
 
+// SDL_HasKeyboard() lists keyboard devices, and some systems list none
+// though keys arrive (Wine): a key event also counts as a keyboard.
+static bool keyboard_seen = false;
+static bool HasKeyboard(void) { return keyboard_seen || SDL_HasKeyboard(); }
+
 static u_long keyb_p1[] = {
     SDL_SCANCODE_W,         // PAD_L2
     SDL_SCANCODE_E,         // PAD_R2
@@ -733,7 +738,7 @@ static unsigned int SinglePadRead(int id) {
 
     u_long pressed = 0;
     if (id == 0) {
-        if (SDL_HasKeyboard()) {
+        if (HasKeyboard()) {
             pressed |= PadRead_Keyboard(keyb_p1, LEN(keyb_p1));
         }
 #ifdef PLATFORM_IOS
@@ -761,7 +766,7 @@ static bool PortHasHostInput(int port) {
     if (gamepads[port].dev) {
         return true;
     }
-    if (port == 0 && SDL_HasKeyboard()) {
+    if (port == 0 && HasKeyboard()) {
         return true;
     }
 #ifdef PLATFORM_IOS
@@ -916,6 +921,7 @@ static void PollEvents(void) {
             break;
 #ifndef PLATFORM_IOS
         case SDL_EVENT_KEY_DOWN:
+            keyboard_seen = true;
             if (event.key.scancode == SDL_SCANCODE_ESCAPE) {
                 SDL_SetAtomicInt(&quit_requested, 1);
             }
