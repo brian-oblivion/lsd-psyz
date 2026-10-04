@@ -597,6 +597,11 @@ int Psyz_VideoVSync(int mode) {
     now_us = (Uint32)(SDL_GetTicksNS() / 1000);
     ret = (unsigned short)((now_us - last_vsync_us) >> 6);
     if (mode == 0 || mode > 1) {
+        // The console's GPU has drawn an ordering table by the vblank the game
+        // waits for. A 64-bit host queues the packets (GPU_Enqueue) and only
+        // draws them on exeque, which a game that never calls DrawSync per
+        // frame does not reach: draw them before the frame goes out.
+        Psyz_GpuExeque();
         PlatformBackend_Present();
         PollEvents();
         WaitForNextFrame(mode > 1 ? mode : 1);
