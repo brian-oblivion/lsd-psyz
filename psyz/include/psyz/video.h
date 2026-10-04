@@ -138,6 +138,32 @@ PsyzAspectMode Psyz_VideoGetAspectMode(void);
 int Psyz_VideoSetAspectMode(PsyzAspectMode mode);
 
 /**
+ * @brief Stretch the presented picture horizontally (default: 1.0)
+ *
+ * Multiplies the aspect ratio the aspect mode gives. With
+ * Psyz_GteSetScreenXScale(0xC000), a stretch of 4/3 shows a 4:3 framebuffer
+ * whose 3D was squeezed by 3/4 as an unsquashed 16:9 picture. A game that
+ * also draws 2D screens sets it back to 1.0 for those; the picture is then
+ * centred with bars. Takes effect on the next presented frame.
+ *
+ * @param stretch horizontal factor, above 0
+ * @return 0 on success, -1 if invalid
+ */
+int Psyz_VideoSetDisplayStretch(float stretch);
+float Psyz_VideoGetDisplayStretch(void);
+
+/**
+ * @brief Shape of the window when it first opens (default: 0, 4:3)
+ *
+ * Call before the first frame. The window opens at the default width and
+ * the height this width:height ratio gives; 0 keeps the default size.
+ *
+ * @param aspect width / height, or 0
+ * @return 0 on success, -1 if invalid
+ */
+int Psyz_VideoSetWindowAspect(float aspect);
+
+/**
  * @brief Get the resolution a game should target to render pixel-perfect
  *
  * Fixed-display targets (PSP, and future NDS/Saturn) return a physical size

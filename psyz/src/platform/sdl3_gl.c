@@ -792,7 +792,8 @@ static void ApplyDisplayPendingChanges() {
     if (cur_display_size.x != display_size.x ||
         cur_display_size.y != display_size.y || !is_window_visible) {
         if (!is_window_visible) {
-            SetWindowSizeInPixels(DEFAULT_FRONT_W, DEFAULT_FRONT_H);
+            WndSize def = DefaultWindowSize();
+            SetWindowSizeInPixels(def.w, def.h);
         }
 
         cur_display_size = display_size;

@@ -928,7 +928,8 @@ static void ApplyDisplayPendingChanges() {
             SDL_GetWindowSizeInPixels(
                 sdl3_window, &wnd_size_in_pixels.w, &wnd_size_in_pixels.h);
 #else
-            SetWindowSizeInPixels(DEFAULT_FRONT_W, DEFAULT_FRONT_H);
+            WndSize def = DefaultWindowSize();
+            SetWindowSizeInPixels(def.w, def.h);
 #endif
         }
         cur_display_size = display_size;

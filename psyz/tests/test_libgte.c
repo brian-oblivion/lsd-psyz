@@ -490,6 +490,26 @@ ZTEST(gte, rot_trans_pers_trans_matrix) {
     // TODO SXY is clipped at abs(0x3FF) but there are no tests for that
 }
 
+// Psyz_GteSetScreenXScale: X is scaled around OFX, Y is not
+ZTEST(gte, rot_trans_pers_screen_x_scale) {
+    RTPContext ctx;
+    RTP_Init(&ctx);
+
+    Psyz_GteSetScreenXScale(0xC000);
+    SetGeomOffset(100, 100);
+    RTP_SetTransM(&ctx, 10, 20, 0);
+    TestRTP(&ctx, 0, SXY(100 + 14, 100 + 39), 0, 0x80021000);
+    RTP_SetTransM(&ctx, -10, -20, 0);
+    TestRTP(&ctx, 0, SXY(100 - 15, 100 - 40), 0, 0x80021000);
+    zexpect_s32_eq(0xC000, Psyz_GteGetScreenXScale());
+
+    Psyz_GteSetScreenXScale(0);
+    zexpect_s32_eq(0x10000, Psyz_GteGetScreenXScale());
+    SetGeomOffset(0, 0);
+    RTP_SetTransM(&ctx, 10, 20, 0);
+    TestRTP(&ctx, 0, SXY(19, 39), 0, 0x80021000);
+}
+
 ZTEST(gte, rot_trans_pers_rot_matrix) {
     RTPContext ctx;
     RTP_Init(&ctx);

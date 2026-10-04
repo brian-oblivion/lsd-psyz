@@ -120,6 +120,8 @@ static int cur_disp_horiz = -1;
 static int cur_disp_vert = -1;
 static bool is_pal = false;
 static PsyzAspectMode aspect_mode = PSYZ_ASPECT_DISPLAY;
+static float display_stretch = 1.0f; // Psyz_VideoSetDisplayStretch
+static float window_aspect = 0.0f;   // Psyz_VideoSetWindowAspect; 0: 4:3
 static WndSize wnd_size_in_pixels = {0, 0};
 
 static void SetWindowSizeInPixels(int width, int height) {
@@ -137,7 +139,7 @@ static void SetWindowSizeInPixels(int width, int height) {
     SDL_SetWindowSize(sdl3_window, actual_width, actual_height);
 }
 
-static float GetCurrentGameAspectRatio(int disp_w, int disp_h) {
+static float GetUnstretchedGameAspectRatio(int disp_w, int disp_h) {
     if (aspect_mode == PSYZ_ASPECT_DISPLAY) {
         float vref = is_pal ? 288.0f : 240.0f;
         return (4.0f / 3.0f) * ((float)set_disp_horiz / 256.0f) /
@@ -147,6 +149,20 @@ static float GetCurrentGameAspectRatio(int disp_w, int disp_h) {
         return 4.0f / 3.0f;
     }
     return (float)disp_w / (float)disp_h;
+}
+
+static float GetCurrentGameAspectRatio(int disp_w, int disp_h) {
+    return GetUnstretchedGameAspectRatio(disp_w, disp_h) * display_stretch;
+}
+
+// The window's size before the user resizes it: DEFAULT_FRONT_W wide, as
+// tall as window_aspect asks (DEFAULT_FRONT_H by default).
+static WndSize DefaultWindowSize(void) {
+    WndSize sz = {DEFAULT_FRONT_W, DEFAULT_FRONT_H};
+    if (window_aspect > 0.0f) {
+        sz.h = (int)(DEFAULT_FRONT_W / window_aspect + 0.5f);
+    }
+    return sz;
 }
 
 // Fit a game of the given aspect ratio into the window, centering it and
@@ -182,6 +198,24 @@ int Psyz_VideoSetAspectMode(PsyzAspectMode mode) {
 }
 
 PsyzAspectMode Psyz_VideoGetAspectMode(void) { return aspect_mode; }
+
+int Psyz_VideoSetDisplayStretch(float stretch) {
+    if (!(stretch > 0.0f)) {
+        return -1;
+    }
+    display_stretch = stretch;
+    return 0;
+}
+
+float Psyz_VideoGetDisplayStretch(void) { return display_stretch; }
+
+int Psyz_VideoSetWindowAspect(float aspect) {
+    if (aspect < 0.0f) {
+        return -1;
+    }
+    window_aspect = aspect;
+    return 0;
+}
 
 static Uint32 last_vsync_us = 0; // time of the last blocking Psyz_VideoVSync
 

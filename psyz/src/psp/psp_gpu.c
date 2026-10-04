@@ -993,6 +993,15 @@ int Psyz_VideoSetAspectMode(PsyzAspectMode mode) {
 
 PsyzAspectMode Psyz_VideoGetAspectMode(void) { return aspect_mode; }
 
+// The PSP's screen is fixed: accepted and ignored.
+int Psyz_VideoSetDisplayStretch(float stretch) {
+    return stretch > 0.0f ? 0 : -1;
+}
+
+float Psyz_VideoGetDisplayStretch(void) { return 1.0f; }
+
+int Psyz_VideoSetWindowAspect(float aspect) { return aspect < 0.0f ? -1 : 0; }
+
 PsyzSize Psyz_VideoGetDisplaySize(void) {
     PsyzSize s = {PSP_SCREEN_W, PSP_SCREEN_H};
     if (aspect_mode == PSYZ_ASPECT_DISPLAY) {

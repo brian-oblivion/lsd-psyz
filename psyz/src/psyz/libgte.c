@@ -1802,6 +1802,18 @@ static unsigned clz16(unsigned x) {
     } while (0)
 #endif
 
+// Horizontal scale of the projected SX around OFX, 16.16. Not a GTE
+// register: an enhancement for wider displays (Psyz_GteSetScreenXScale).
+static int sx_scale = 0x10000;
+#define SX_SCALE(v)                                                            \
+    (sx_scale == 0x10000 ? (v) : (int)(((long long)(v) * sx_scale) >> 16))
+
+void Psyz_GteSetScreenXScale(int scale) {
+    sx_scale = scale > 0 ? scale : 0x10000;
+}
+
+int Psyz_GteGetScreenXScale(void) { return sx_scale; }
+
 // Perspective transformation of one vertex into caller locals.
 #define RTP_VERTEX(                                                            \
     sf, lm, x, y, z, f, div, mac1, mac2, mac3, ir1, ir2, ir3, sx, sy, sz)      \
@@ -1829,7 +1841,7 @@ static unsigned clz16(unsigned x) {
         } else {                                                               \
             GTE_DIVIDE(div, H, sz);                                            \
         }                                                                      \
-        (sx) = OFX + MUL_DIV_HI(div, ir1);                                     \
+        (sx) = OFX + SX_SCALE(MUL_DIV_HI(div, ir1));                           \
         MAC0_OVF(sx, f);                                                       \
         SAT_FLAG(sx, sx, -0x400, 0x3FF, FLAG_SX2_SAT, f);                      \
         (sy) = OFY + MUL_DIV_HI(div, ir2);                                     \

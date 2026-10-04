@@ -106,6 +106,20 @@ void Psyz_GteAvsz3(void);
 void Psyz_GteAvsz4(void);
 void Psyz_GteDpcs(void);
 void Psyz_GteLcir(void);
+/**
+ * @brief Scale the projected screen X around the screen offset (OFX)
+ *
+ * Not part of the PS1's GTE: an enhancement for displays wider than 4:3.
+ * RTPS and RTPT (and the libgte calls built on them) multiply the projected
+ * X by @p scale, 16.16 fixed point, before adding OFX. 0x10000 (the default)
+ * is the console's projection; 0xC000 (3/4) squeezes a 16:9 field of view
+ * into a 4:3 framebuffer, to be shown stretched with
+ * Psyz_VideoSetDisplayStretch.
+ *
+ * @param scale 16.16 factor; 0 or less restores 0x10000
+ */
+void Psyz_GteSetScreenXScale(int scale);
+int Psyz_GteGetScreenXScale(void);
 void Psyz_GteRtps(void);
 void Psyz_GteRtpt(void);
 void Psyz_GteNclip(void);
