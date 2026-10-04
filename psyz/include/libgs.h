@@ -574,6 +574,10 @@ typedef struct {
 /**
  * @brief One TMD object's tables, as the GsTMDfast and GsTMDdiv drawing
  * functions take them
+ *
+ * On the PlayStation this overlays a mapped TMD's object table. On psyz the
+ * table keeps the file's 32-bit words (see GsMapModelingData()), so only the
+ * counts can be read through it; GsTMDAddr() resolves the three lists.
  */
 struct TMD_STRUCT {
     u_long* vertop;  /**< Vertex table */
@@ -1008,9 +1012,24 @@ void GsSetClip(RECT* clip);
  *
  * Maps TMD modeling data offsets to actual memory addresses.
  *
- * @param base Pointer to TMD data
+ * psyz: an address does not fit the file's 32-bit words on a 64-bit host,
+ * so at every width the offsets are mapped to offsets from each object's
+ * own table entry instead, which GsTMDAddr() resolves. A TMD so mapped
+ * reads the same wherever it is, and its object table keeps the file's
+ * layout (7 words an object).
+ *
+ * @param base Pointer to TMD data, past its id word (at its flags)
  */
 void GsMapModelingData(u_long* base);
+
+/**
+ * @brief The address of one of a mapped TMD object's lists (psyz)
+ *
+ * @param obj The object's entry in the TMD's object table (GsDOBJ2's tmd)
+ * @param word 0 for the vertices, 2 for the normals, 4 for the primitives
+ */
+#define GsTMDAddr(obj, word)                                                   \
+    ((void*)((unsigned char*)(obj) + ((const int*)(obj))[word]))
 
 /**
  * @brief Get work base address
