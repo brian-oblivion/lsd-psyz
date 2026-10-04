@@ -227,6 +227,9 @@ static GLuint scratch_texture = 0;
 static GLuint scratch_fbo = 0;
 static GLuint scaled_vram_texture = 0;
 static GLuint scaled_vram_fbo = 0; // it's vram_fbo * internal_res
+static GLuint sharp_texture = 0;   // PSYZ_SCALE_SHARP's prescaled picture
+static GLuint sharp_fbo = 0;
+static int sharp_w = 0, sharp_h = 0;
 static unsigned internal_res = 1;
 static unsigned set_internal_res = 1;
 static GLposi display_area = {0, 0};
@@ -591,6 +594,78 @@ static void ApplyPendingInternalRes(void) {
     INFOF("internal resolution set to %dx (%dx%d)", n, VRAM_W * n, VRAM_H * n);
 }
 
+static void ReleaseSharpTarget(void) {
+    if (sharp_texture) {
+        glDeleteTextures(1, &sharp_texture);
+        sharp_texture = 0;
+    }
+    if (sharp_fbo) {
+        glDeleteFramebuffers(1, &sharp_fbo);
+        sharp_fbo = 0;
+    }
+    sharp_w = sharp_h = 0;
+}
+
+// The SHARP prescale target, at least w x h. Returns false if it cannot be
+// made; the caller then scales in one step.
+static bool EnsureSharpTarget(int w, int h) {
+    if (sharp_fbo && sharp_w >= w && sharp_h >= h) {
+        return true;
+    }
+    ReleaseSharpTarget();
+    glGenTextures(1, &sharp_texture);
+    glBindTexture(GL_TEXTURE_2D, sharp_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(
+        GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &sharp_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, sharp_fbo);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sharp_texture, 0);
+    bool ok =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindTexture(GL_TEXTURE_2D, vram_texture);
+    if (!ok) {
+        ERRORF("sharp scaling FBO creation failed (%dx%d)", w, h);
+        ReleaseSharpTarget();
+        return false;
+    }
+    sharp_w = w;
+    sharp_h = h;
+    return true;
+}
+
+// Draws the picture's src (in draw-FBO pixels, top-down) into dst of the
+// window, by the scale mode. The draw FBO is bottom-up, hence the flip.
+static void BlitGameToWindow(SDL_Rect src, SDL_Rect dst) {
+    const GLint sx0 = src.x, sy0 = src.y + src.h;
+    const GLint sx1 = src.x + src.w, sy1 = src.y;
+    int kx = 1, ky = 1;
+    if (scale_mode == PSYZ_SCALE_SHARP) {
+        SharpPrescale(src.w, src.h, dst.w, dst.h, &kx, &ky);
+    }
+    if ((kx > 1 || ky > 1) && EnsureSharpTarget(src.w * kx, src.h * ky)) {
+        const int pw = src.w * kx, ph = src.h * ky;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sharp_fbo);
+        glBlitFramebuffer(
+            sx0, sy0, sx1, sy1, 0, ph, pw, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, sharp_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, ph, pw, 0, dst.x, dst.y, dst.x + dst.w,
+                          dst.y + dst.h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        return;
+    }
+    const GLenum filter =
+        scale_mode == PSYZ_SCALE_SMOOTH || scale_mode == PSYZ_SCALE_SHARP
+            ? GL_LINEAR
+            : GL_NEAREST;
+    glBlitFramebuffer(sx0, sy0, sx1, sy1, dst.x, dst.y, dst.x + dst.w,
+                      dst.y + dst.h, GL_COLOR_BUFFER_BIT, filter);
+}
+
 static void PlatformBackend_Present(void) {
     if (!sdl3_window && !InitPlatform()) {
         return;
@@ -613,16 +688,17 @@ static void PlatformBackend_Present(void) {
 
     WndSize win;
     SDL_GetWindowSizeInPixels(sdl3_window, &win.w, &win.h);
-    SDL_Rect dst = FitGameToWindow(game_aspect, win);
+    SDL_Rect dst =
+        debug_show_vram ? FitGameToWindow(game_aspect, win)
+                        : PlaceGameInWindow(game_aspect, win, src.w, src.h);
 
     glViewport(0, 0, win.w, win.h);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (disp_on) {
-        glBlitFramebuffer(src.x * n, (src.y + src.h) * n, (src.x + src.w) * n,
-                          src.y * n, dst.x, dst.y, dst.x + dst.w, dst.y + dst.h,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        SDL_Rect scaled = {src.x * n, src.y * n, src.w * n, src.h * n};
+        BlitGameToWindow(scaled, dst);
     }
     if (overlay_frame_cb) {
         overlay_frame_cb();
@@ -686,6 +762,7 @@ void ResetPlatform(void) {
         glDeleteFramebuffers(1, &scaled_vram_fbo);
         scaled_vram_fbo = 0;
     }
+    ReleaseSharpTarget();
     internal_res = 1;
     free(vram_convert_buf);
     vram_convert_buf = NULL;

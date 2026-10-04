@@ -122,6 +122,7 @@ static bool is_pal = false;
 static PsyzAspectMode aspect_mode = PSYZ_ASPECT_DISPLAY;
 static float display_stretch = 1.0f; // Psyz_VideoSetDisplayStretch
 static float window_aspect = 0.0f;   // Psyz_VideoSetWindowAspect; 0: 4:3
+static PsyzScaleMode scale_mode = PSYZ_SCALE_NEAREST;
 static WndSize wnd_size_in_pixels = {0, 0};
 
 static void SetWindowSizeInPixels(int width, int height) {
@@ -188,6 +189,69 @@ static SDL_Rect FitGameToWindow(float game_aspect, WndSize win) {
     r.y = (win.h - r.h) / 2;
     return r;
 }
+
+// INTEGER: the largest whole multiples of the display (disp_w x disp_h
+// pixels) that fit the window, the horizontal one the nearest to
+// game_aspect for each vertical one. FitGameToWindow when the
+// window is smaller than the display.
+static SDL_Rect FitGameToWindowInteger(
+    float game_aspect, WndSize win, int disp_w, int disp_h) {
+    if (disp_w <= 0 || disp_h <= 0) {
+        return FitGameToWindow(game_aspect, win);
+    }
+    for (int ky = win.h / disp_h; ky >= 1; ky--) {
+        int kx = (int)(ky * disp_h * game_aspect / disp_w + 0.5f);
+        if (kx < 1) {
+            kx = 1;
+        }
+        // too wide: a smaller vertical multiple, not a narrower picture
+        if (kx * disp_w <= win.w) {
+            SDL_Rect r = {0, 0, kx * disp_w, ky * disp_h};
+            r.x = (win.w - r.w) / 2;
+            r.y = (win.h - r.h) / 2;
+            return r;
+        }
+    }
+    return FitGameToWindow(game_aspect, win);
+}
+
+// Where the picture goes in the window, by the scale mode.
+static SDL_Rect PlaceGameInWindow(
+    float game_aspect, WndSize win, int disp_w, int disp_h) {
+    if (scale_mode == PSYZ_SCALE_INTEGER) {
+        return FitGameToWindowInteger(game_aspect, win, disp_w, disp_h);
+    }
+    return FitGameToWindow(game_aspect, win);
+}
+
+// SHARP: the whole-multiple prescale of a src_w x src_h picture shown at
+// dst_w x dst_h, at least 1 per axis; 1x1 means one bilinear step does.
+static void SharpPrescale(
+    int src_w, int src_h, int dst_w, int dst_h, int* kx, int* ky) {
+    *kx = src_w > 0 ? (dst_w + src_w - 1) / src_w : 1;
+    *ky = src_h > 0 ? (dst_h + src_h - 1) / src_h : 1;
+    if (*kx < 1) {
+        *kx = 1;
+    }
+    if (*ky < 1) {
+        *ky = 1;
+    }
+}
+
+int Psyz_VideoSetScaleMode(PsyzScaleMode mode) {
+    switch (mode) {
+    case PSYZ_SCALE_NEAREST:
+    case PSYZ_SCALE_SHARP:
+    case PSYZ_SCALE_SMOOTH:
+    case PSYZ_SCALE_INTEGER:
+        scale_mode = mode;
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+PsyzScaleMode Psyz_VideoGetScaleMode(void) { return scale_mode; }
 
 int Psyz_VideoSetAspectMode(PsyzAspectMode mode) {
     if (mode != PSYZ_ASPECT_DISPLAY && mode != PSYZ_ASPECT_SQUARE) {

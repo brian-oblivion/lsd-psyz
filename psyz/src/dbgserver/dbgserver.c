@@ -73,6 +73,8 @@ typedef struct {
 
     int set_aspect;
     int aspect;
+    int set_scale;
+    int scale;
 
     int set_internal_resolution;
     unsigned internal_resolution;
@@ -398,6 +400,12 @@ static const ModeEntry g_aspect_modes[] = {
     {"display", PSYZ_ASPECT_DISPLAY},
     {"square", PSYZ_ASPECT_SQUARE},
 };
+static const ModeEntry g_scale_modes[] = {
+    {"nearest", PSYZ_SCALE_NEAREST},
+    {"sharp", PSYZ_SCALE_SHARP},
+    {"smooth", PSYZ_SCALE_SMOOTH},
+    {"integer", PSYZ_SCALE_INTEGER},
+};
 
 static const char* ModeName(const ModeEntry* table, int count, int value) {
     for (int i = 0; i < count; i++) {
@@ -438,13 +446,15 @@ static void FormatConfigJson(char* out, int out_len) {
     PsyzSize disp = Psyz_VideoGetDisplaySize();
     snprintf(
         out, out_len,
-        "{\"vsync\":\"%s\",\"dither\":\"%s\",\"aspect\":\"%s\",\n"
+        "{\"vsync\":\"%s\",\"dither\":\"%s\",\"aspect\":\"%s\",\"scale\":\"%"
+        "s\",\n"
         "\"internal_resolution\":%u,\"display_size\":{\"w\":%d,\"h\":%d}}\n",
         ModeName(g_vsync_modes, LEN(g_vsync_modes), Psyz_VideoGetVsyncMode()),
         ModeName(
             g_dither_modes, LEN(g_dither_modes), Psyz_VideoGetDitheringMode()),
         ModeName(
             g_aspect_modes, LEN(g_aspect_modes), Psyz_VideoGetAspectMode()),
+        ModeName(g_scale_modes, LEN(g_scale_modes), Psyz_VideoGetScaleMode()),
         Psyz_VideoGetInternalResolution(), disp.w, disp.h);
 }
 
@@ -466,6 +476,10 @@ static void CmdConfigSet(DbgCommand* cmd) {
     }
     if (a->set_aspect &&
         Psyz_VideoSetAspectMode((PsyzAspectMode)a->aspect) != 0) {
+        cmd->ok = 0;
+        return;
+    }
+    if (a->set_scale && Psyz_VideoSetScaleMode((PsyzScaleMode)a->scale) != 0) {
         cmd->ok = 0;
         return;
     }
@@ -697,6 +711,7 @@ static void EpConfigSet(const HttpRequest* hr, dbg_socket_t sock) {
          &a->dither},
         {"aspect", g_aspect_modes, LEN(g_aspect_modes), &a->set_aspect,
          &a->aspect},
+        {"scale", g_scale_modes, LEN(g_scale_modes), &a->set_scale, &a->scale},
     };
 
     char val[32];
@@ -795,7 +810,7 @@ static const DbgRoute g_routes[] = {
     {"/config",
      {EpConfigGet, "read video config", NULL},
      {EpConfigSet, "apply video config",
-      "vsync,dither,aspect,internal_resolution"}},
+      "vsync,dither,aspect,scale,internal_resolution"}},
     {"/input",
      {NULL, NULL, NULL},
      {EpInputQueue, "queue scripted input", "port,buttons,frames"}},

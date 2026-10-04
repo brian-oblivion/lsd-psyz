@@ -77,6 +77,14 @@ typedef enum {
     PSYZ_ASPECT_SQUARE,  /**< 1:1 from framebuffer (pixel-perfect) */
 } PsyzAspectMode;
 
+typedef enum {
+    PSYZ_SCALE_NEAREST, /**< nearest neighbour to the window (default) */
+    PSYZ_SCALE_SHARP,   /**< integer nearest prescale, then bilinear: even,
+                             crisp pixels at any window size */
+    PSYZ_SCALE_SMOOTH,  /**< bilinear */
+    PSYZ_SCALE_INTEGER, /**< whole multiples of the display only, bordered */
+} PsyzScaleMode;
+
 typedef struct {
     double last_frame_time_us;       /**< duration of last frame */
     double last_draw_time_us;        /**< render time excluding vsync wait */
@@ -162,6 +170,25 @@ float Psyz_VideoGetDisplayStretch(void);
  * @return 0 on success, -1 if invalid
  */
 int Psyz_VideoSetWindowAspect(float aspect);
+
+/**
+ * @brief How the picture is scaled to the window (default: NEAREST)
+ *
+ * NEAREST maps each output pixel to the nearest framebuffer pixel; at a
+ * window size that is not a whole multiple, some pixels come out a column
+ * or row wider than others. SHARP scales by the smallest whole multiple at
+ * least as large as the window with nearest neighbour, then to the window
+ * bilinearly: pixels stay square-edged and even, with at most one blended
+ * pixel between them. SMOOTH is bilinear. INTEGER draws at the largest
+ * whole multiple that fits (per axis, keeping the aspect ratio as close as
+ * whole multiples allow), centred, with borders. Takes effect on the next
+ * presented frame.
+ *
+ * @param mode scale mode
+ * @return 0 on success, -1 if invalid
+ */
+int Psyz_VideoSetScaleMode(PsyzScaleMode mode);
+PsyzScaleMode Psyz_VideoGetScaleMode(void);
 
 /**
  * @brief Get the resolution a game should target to render pixel-perfect

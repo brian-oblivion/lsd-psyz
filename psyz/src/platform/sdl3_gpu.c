@@ -63,6 +63,8 @@ static SDL_GPUTexture* vram_render = NULL;
 static SDL_GPUTexture* vram_sample = NULL;
 static SDL_GPUSampler* vram_sampler = NULL;
 static SDL_GPUTexture* scaled_vram_render = NULL;
+static SDL_GPUTexture* sharp_target = NULL; // PSYZ_SCALE_SHARP's prescale
+static Uint32 sharp_w = 0, sharp_h = 0;
 static unsigned internal_res = 1;
 static unsigned set_internal_res = 1;
 static SDL_GPUBuffer* vbuf = NULL;
@@ -625,6 +627,83 @@ static void ApplyPendingInternalRes(void) {
     INFOF("internal resolution set to %dx (%dx%d)", n, VRAM_W * n, VRAM_H * n);
 }
 
+static void ReleaseSharpTarget(void) {
+    if (sharp_target) {
+        SDL_ReleaseGPUTexture(device, sharp_target);
+        sharp_target = NULL;
+    }
+    sharp_w = sharp_h = 0;
+}
+
+// The SHARP prescale target, at least w x h; false if it cannot be made.
+static bool EnsureSharpTarget(Uint32 w, Uint32 h) {
+    if (sharp_target && sharp_w >= w && sharp_h >= h) {
+        return true;
+    }
+    ReleaseSharpTarget();
+    const SDL_GPUTextureCreateInfo info = {
+        .type = SDL_GPU_TEXTURETYPE_2D,
+        .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+        .usage =
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        .width = w,
+        .height = h,
+        .layer_count_or_depth = 1,
+        .num_levels = 1,
+    };
+    sharp_target = SDL_CreateGPUTexture(device, &info);
+    if (!sharp_target) {
+        ERRORF("sharp scaling texture creation failed (%ux%u): %s", w, h,
+               SDL_GetError());
+        return false;
+    }
+    sharp_w = w;
+    sharp_h = h;
+    return true;
+}
+
+// Blits src into dst of the swapchain by the scale mode, clearing the
+// swapchain to black first (the bars around the picture).
+static void BlitGameToSwapchain(
+    SDL_GPUCommandBuffer* cmd, SDL_GPUBlitRegion src, SDL_GPUTexture* swapchain,
+    SDL_Rect dst) {
+    int kx = 1, ky = 1;
+    if (scale_mode == PSYZ_SCALE_SHARP) {
+        SharpPrescale((int)src.w, (int)src.h, dst.w, dst.h, &kx, &ky);
+    }
+    if ((kx > 1 || ky > 1) &&
+        EnsureSharpTarget(src.w * (Uint32)kx, src.h * (Uint32)ky)) {
+        const SDL_GPUBlitInfo prescale = {
+            .source = src,
+            .destination = {.texture = sharp_target,
+                            .w = src.w * (Uint32)kx,
+                            .h = src.h * (Uint32)ky},
+            .load_op = SDL_GPU_LOADOP_DONT_CARE,
+            .filter = SDL_GPU_FILTER_NEAREST,
+        };
+        SDL_BlitGPUTexture(cmd, &prescale);
+        src = prescale.destination;
+    }
+    const SDL_GPUBlitInfo blit = {
+        .source = src,
+        .destination =
+            {
+                .texture = swapchain,
+                .x = (Uint32)dst.x,
+                .y = (Uint32)dst.y,
+                .w = (Uint32)dst.w,
+                .h = (Uint32)dst.h,
+            },
+        .load_op = SDL_GPU_LOADOP_CLEAR,
+        .clear_color = {0.0f, 0.0f, 0.0f, 1.0f},
+        .filter =
+            scale_mode == PSYZ_SCALE_SHARP || scale_mode == PSYZ_SCALE_SMOOTH
+                ? SDL_GPU_FILTER_LINEAR
+                : SDL_GPU_FILTER_NEAREST,
+    };
+    SDL_BlitGPUTexture(cmd, &blit);
+}
+
 static void PlatformBackend_Present(void) {
     if (!sdl3_window && !InitPlatform()) {
         return;
@@ -678,25 +757,12 @@ static void PlatformBackend_Present(void) {
                 }
 
                 WndSize win = {(int)sc_w, (int)sc_h};
-                SDL_Rect dst = FitGameToWindow(game_aspect, win);
-
-                const SDL_GPUBlitInfo blit = {
-                    .source = src,
-                    .destination =
-                        {
-                            .texture = swapchain,
-                            .x = (Uint32)dst.x,
-                            .y = (Uint32)dst.y,
-                            .w = (Uint32)dst.w,
-                            .h = (Uint32)dst.h,
-                        },
-                    // clear the swapchain to black first so the horizontal or
-                    // vertical bars around the game output are black
-                    .load_op = SDL_GPU_LOADOP_CLEAR,
-                    .clear_color = {0.0f, 0.0f, 0.0f, 1.0f},
-                    .filter = SDL_GPU_FILTER_NEAREST,
-                };
-                SDL_BlitGPUTexture(cmd, &blit);
+                SDL_Rect dst =
+                    debug_show_vram
+                        ? FitGameToWindow(game_aspect, win)
+                        : PlaceGameInWindow(
+                              game_aspect, win, display_size.x, display_size.y);
+                BlitGameToSwapchain(cmd, src, swapchain, dst);
             }
             if (overlay_frame_cb) {
                 overlay_frame_cb();
@@ -751,6 +817,7 @@ static void QuitPlatform(void) {
             SDL_ReleaseGPUTexture(device, scaled_vram_render);
             scaled_vram_render = NULL;
         }
+        ReleaseSharpTarget();
         if (vram_sampler) {
             SDL_ReleaseGPUSampler(device, vram_sampler);
             vram_sampler = NULL;

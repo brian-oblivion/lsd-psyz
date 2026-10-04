@@ -1002,6 +1002,12 @@ float Psyz_VideoGetDisplayStretch(void) { return 1.0f; }
 
 int Psyz_VideoSetWindowAspect(float aspect) { return aspect < 0.0f ? -1 : 0; }
 
+int Psyz_VideoSetScaleMode(PsyzScaleMode mode) {
+    return mode == PSYZ_SCALE_NEAREST ? 0 : -1;
+}
+
+PsyzScaleMode Psyz_VideoGetScaleMode(void) { return PSYZ_SCALE_NEAREST; }
+
 PsyzSize Psyz_VideoGetDisplaySize(void) {
     PsyzSize s = {PSP_SCREEN_W, PSP_SCREEN_H};
     if (aspect_mode == PSYZ_ASPECT_DISPLAY) {
