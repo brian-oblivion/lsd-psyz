@@ -13,6 +13,12 @@ void MyPadInit(int mode) {
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 }
 
+int Psyz_PadsSetKeyboardMap(const PsyzKeyBinding* map, int count) {
+    (void)map;
+    (void)count;
+    return -1; // no keyboard
+}
+
 static u_long ReadButtons(unsigned int keys) {
     u_long pressed = 0;
     if (keys & PSP_CTRL_TRIANGLE) {
