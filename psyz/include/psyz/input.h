@@ -74,6 +74,43 @@ void Psyz_PadsGet(int port, char* dst, int len);
  */
 void Psyz_PadsSet(int port, const char* src, int len);
 
+/**
+ * @brief One key of pad 1's keyboard map
+ *
+ * While @p key is held, the pad reports @p buttons pressed. @p key is the
+ * backend's key code: an SDL_Scancode on SDL3 (SDL_SCANCODE_W, ...), so the
+ * binding follows the key's position, not the letter the layout prints on it.
+ * @p buttons is a mask of libetc's PadRead bits (PADLup, PADRright, ...).
+ * A key may press several buttons, and several keys the same button.
+ */
+typedef struct {
+    int key;
+    unsigned short buttons;
+} PsyzKeyBinding;
+
+/** The most bindings Psyz_PadsSetKeyboardMap takes. */
+#define PSYZ_KEYBOARD_MAP_MAX 64
+
+/**
+ * @brief Replace the keyboard map of pad 1
+ *
+ * The keyboard always drives port 0; gamepads keep their own mapping. The
+ * map is copied. A NULL @p map or a @p count of 0 restores the built-in map
+ * (arrows d-pad, Enter START, Backspace SELECT, D circle, S triangle,
+ * X cross, Z square, Q L1, W L2, E R2, R R1, 1/2 L3/R3).
+ *
+ * Escape quits the program while the map in use does not bind it; a game
+ * that binds Escape (say, to START for a pause) quits through the window's
+ * close button instead.
+ *
+ * @param map Bindings, at most PSYZ_KEYBOARD_MAP_MAX
+ * @param count Number of bindings in @p map
+ * @return @p count, 0 when the built-in map is restored, or -1 (map
+ *         unchanged) when there are too many bindings or a key is invalid.
+ *         Backends without a keyboard return -1.
+ */
+int Psyz_PadsSetKeyboardMap(const PsyzKeyBinding* map, int count);
+
 #ifdef __cplusplus
 }
 #endif

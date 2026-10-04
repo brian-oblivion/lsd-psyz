@@ -660,12 +660,54 @@ static u_long keyb_p1[] = {
     SDL_SCANCODE_DOWN,      // PAD_DOWN
     SDL_SCANCODE_LEFT,      // PAD_LEFT
 };
-static unsigned int PadRead_Keyboard(u_long* config, int config_len) {
+// The game's map from Psyz_PadsSetKeyboardMap; keyb_p1 while there is none.
+static PsyzKeyBinding keyb_map[PSYZ_KEYBOARD_MAP_MAX];
+static int keyb_map_len = 0;
+
+int Psyz_PadsSetKeyboardMap(const PsyzKeyBinding* map, int count) {
+    if (!map || count <= 0) {
+        keyb_map_len = 0;
+        return 0;
+    }
+    if (count > PSYZ_KEYBOARD_MAP_MAX) {
+        return -1;
+    }
+    for (int i = 0; i < count; i++) {
+        if (map[i].key <= SDL_SCANCODE_UNKNOWN ||
+            map[i].key >= SDL_SCANCODE_COUNT) {
+            return -1;
+        }
+    }
+    memcpy(keyb_map, map, sizeof(*map) * count);
+    keyb_map_len = count;
+    return count;
+}
+
+#ifndef PLATFORM_IOS
+static bool KeyIsBound(SDL_Scancode key) {
+    for (int i = 0; i < keyb_map_len; i++) {
+        if (keyb_map[i].key == (int)key) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+static unsigned int PadRead_Keyboard(void) {
     const bool* keyb = SDL_GetKeyboardState(NULL);
     unsigned int r = 0;
-    for (int i = 0; i < config_len; i++) {
-        if (keyb[config[i]]) {
-            r |= 1UL << i;
+    if (keyb_map_len == 0) {
+        for (int i = 0; i < LEN(keyb_p1); i++) {
+            if (keyb[keyb_p1[i]]) {
+                r |= 1UL << i;
+            }
+        }
+        return r;
+    }
+    for (int i = 0; i < keyb_map_len; i++) {
+        if (keyb[keyb_map[i].key]) {
+            r |= keyb_map[i].buttons;
         }
     }
     return r;
@@ -739,7 +781,7 @@ static unsigned int SinglePadRead(int id) {
     u_long pressed = 0;
     if (id == 0) {
         if (HasKeyboard()) {
-            pressed |= PadRead_Keyboard(keyb_p1, LEN(keyb_p1));
+            pressed |= PadRead_Keyboard();
         }
 #ifdef PLATFORM_IOS
         pressed |= Psyz_IosReadTouchControls();
@@ -922,7 +964,9 @@ static void PollEvents(void) {
 #ifndef PLATFORM_IOS
         case SDL_EVENT_KEY_DOWN:
             keyboard_seen = true;
-            if (event.key.scancode == SDL_SCANCODE_ESCAPE) {
+            // Escape quits unless the game's keyboard map gives it a button.
+            if (event.key.scancode == SDL_SCANCODE_ESCAPE &&
+                !KeyIsBound(SDL_SCANCODE_ESCAPE)) {
                 SDL_SetAtomicInt(&quit_requested, 1);
             }
             if (event.key.scancode == SDL_SCANCODE_F6) {
