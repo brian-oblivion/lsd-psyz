@@ -133,6 +133,19 @@ typedef void (*PsyzVSyncCb)(void);
  */
 PsyzVSyncCb Psyz_SetVSyncCb(PsyzVSyncCb cb);
 
+/**
+ * @brief What libapi's VSync(n) does once its wait is over.
+ *
+ * Reads the pads, then fires the Psyz_SetVSyncCb callback once and the
+ * VSyncCallback ones n times, as VSync(n) does after Psyz_VideoVSync(n).
+ * For a host that paces a game's frames itself (presenting with
+ * Psyz_VideoVSync and its own timing) but keeps what the game sees from
+ * VSync(n) the same.
+ *
+ * @param n The vertical blanks to fire VSyncCallback for; at least 1.
+ */
+void Psyz_VSyncRunCallbacks(int n);
+
 #ifdef __cplusplus
 }
 #endif
