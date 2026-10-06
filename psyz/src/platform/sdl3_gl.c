@@ -44,6 +44,9 @@ static const char vertex_shader_body[] = {
     "layout(location = 3) in vec4 twin;\n"
     "uniform vec2 resolution;\n"
     "uniform vec2 drawOffset;\n"
+    // half a render pixel in VRAM units, so the pixel centres the rasteriser
+    // tests land on the PS1's integer pixel positions
+    "uniform vec2 samplePoint;\n"
     "out vec4 vertexColor;\n"
     "out vec2 rawUV;\n"
     "flat out uint tpage;\n"
@@ -59,8 +62,10 @@ static const char vertex_shader_body[] = {
     "flat out uvec4 texWindow;\n"   // GP0(E2h) as {and.xy, or.zw}
     "\n"
     "void main() {\n"
-    "    float x = ((pos.x + drawOffset.x) / (1024.0 / 2.0)) - 1.0;\n"
-    "    float y = ((pos.y + drawOffset.y) / (512.0 / 2.0)) - 1.0;\n"
+    // a line's quad is already laid out around the pixel centres
+    "    vec2 shift = (uint(tex.w) & 0x2000u) != 0u ? vec2(0.0) : samplePoint;\n"
+    "    float x = ((pos.x + drawOffset.x + shift.x) / (1024.0 / 2.0)) - 1.0;\n"
+    "    float y = ((pos.y + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;\n"
     "    gl_Position = vec4(x, y, 0.0, 1.0);\n"
     // gouraud colors
     "    vertexColor = color;\n"
@@ -117,8 +122,7 @@ static const char fragment_shader_body[] = {
     "uniform sampler2D texVram;\n"
     "\n"
     "uvec2 resolveTexel() {\n"
-    "    vec2 texelStep = vec2(abs(dFdx(rawUV.x)), abs(dFdy(rawUV.y)));\n"
-    "    vec2 uv = rawUV - 0.5 * texelStep + 1.0 / 512.0;\n"
+    "    vec2 uv = rawUV + 1.0 / 512.0;\n"
     "    uvec2 texel = uvec2(clamp(floor(uv), vec2(0.0), vec2(255.0)));\n"
     "    return (texel & texWindow.xy) | texWindow.zw;\n"
     "}\n"
@@ -221,6 +225,7 @@ static GLuint shader_program = 0;
 static GLint uniform_resolution = 0;
 static GLint uniform_tex_vram = 0;
 static GLint uniform_draw_offset = 0;
+static GLint uniform_sample_point = 0;
 static GLuint vram_texture;
 static GLuint vram_fbo = 0;
 static GLuint scratch_texture = 0;
@@ -403,6 +408,7 @@ bool InitPlatform() {
     uniform_resolution = glGetUniformLocation(shader_program, "resolution");
     uniform_tex_vram = glGetUniformLocation(shader_program, "texVram");
     uniform_draw_offset = glGetUniformLocation(shader_program, "drawOffset");
+    uniform_sample_point = glGetUniformLocation(shader_program, "samplePoint");
 
     glUniform1i(uniform_tex_vram, 0);
     glUniform2f(uniform_draw_offset, 0, 0);
@@ -1050,9 +1056,7 @@ int Draw_PushPrim(u_long* packets, int max_len) {
                 len++;
             }
 
-            if (isTextured) {
-                FixupFlipUV(vertex_cur, code & EXTRA_VERTEX);
-            } else {
+            if (!isTextured) {
                 clut = -1;
                 tpage = cur_tpage | TPAGE_NOTEXTURE;
             }
@@ -1165,7 +1169,7 @@ int Draw_PushPrim(u_long* packets, int max_len) {
                 q[2].g = cg[s + 1];
                 q[2].b = cb[s + 1];
                 q[2].a = ca[s + 1];
-                u16 lt = cur_tpage | TPAGE_NOTEXTURE;
+                u16 lt = cur_tpage | TPAGE_NOTEXTURE | TPAGE_LINE;
                 if (CanLineDither()) {
                     lt |= TPAGE_DITHER;
                 }
@@ -1475,6 +1479,12 @@ void Draw_FlushBuffer(void) {
         const GLsizei viewport_w =
             (GLsizei)lroundf((float)VRAM_W * render_scale * grid_scale_x);
         glViewport(viewport_x, 0, viewport_w, VRAM_H * (GLsizei)internal_res);
+        // The PS1 tests and interpolates each pixel at its integer position;
+        // GL at the render pixel's centre. Moving everything half a render
+        // pixel puts the two on the same point, so a pixel's UV is always
+        // taken inside the primitive that covers it.
+        glUniform2f(uniform_sample_point, 0.5f / (render_scale * grid_scale_x),
+                    0.5f / render_scale);
     }
     int prim_size = 3;
     int start = 0;
