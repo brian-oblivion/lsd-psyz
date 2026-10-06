@@ -52,17 +52,8 @@ PsyzVSyncCb Psyz_SetVSyncCb(PsyzVSyncCb cb) {
 
 extern void (*g_VsyncCallbacks[8])();
 
-// VSync(n) with n > 1 presents once and waits n vertical blanks since the
-// previous VSync, as the SDK does for games that run at 30 or 20 fps.
-int VSync(int mode) {
-    int elapsed, n, i;
-    if (mode < 0) {
-        return Psyz_VideoVSync(-1);
-    } else if (mode == 1) {
-        return Psyz_VideoVSync(1);
-    }
-    n = mode > 0 ? mode : 1;
-    elapsed = Psyz_VideoVSync(mode);
+void Psyz_VSyncRunCallbacks(int n) {
+    int i;
     ReadPadsOnVsync(); // this is done on vsync by the BIOS
     if (g_PsyzVsyncCb) {
         g_PsyzVsyncCb();
@@ -74,6 +65,19 @@ int VSync(int mode) {
             }
         }
     }
+}
+
+// VSync(n) with n > 1 presents once and waits n vertical blanks since the
+// previous VSync, as the SDK does for games that run at 30 or 20 fps.
+int VSync(int mode) {
+    int elapsed;
+    if (mode < 0) {
+        return Psyz_VideoVSync(-1);
+    } else if (mode == 1) {
+        return Psyz_VideoVSync(1);
+    }
+    elapsed = Psyz_VideoVSync(mode);
+    Psyz_VSyncRunCallbacks(mode > 0 ? mode : 1);
     return elapsed;
 }
 
