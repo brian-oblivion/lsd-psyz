@@ -950,6 +950,14 @@ int Psyz_VideoVSync(int mode) {
     return ret;
 }
 
+// The PSP shows a frame per vertical blank: present at its 59.94 Hz.
+void Psyz_VideoPresent(double fps) {
+    (void)fps;
+    Psyz_VideoVSync(0);
+}
+
+double Psyz_VideoGetDisplayRate(void) { return 59.94; }
+
 int Psyz_VideoSetVsyncMode(PsyzVsyncMode mode) {
     switch (mode) {
     case PSYZ_VSYNC_AUTO:
