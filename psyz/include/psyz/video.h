@@ -268,6 +268,29 @@ unsigned Psyz_VideoGetInternalResolution(void);
 int Psyz_VideoVSync(int mode);
 
 /**
+ * @brief Present at a rate of the caller's, not the console's blank
+ *
+ * Presents what has been drawn and waits for the next frame at `fps` frames
+ * a second: by the driver's VSync when the display refreshes at about that
+ * rate (or when VSync is forced on), else by psyz's frame limiter; with
+ * vsync limitless or `fps` <= 0 it doesn't wait. No VSync callbacks run and
+ * the VSync counter is not advanced: for a loop that keeps the console's
+ * time itself, such as one drawing frames between a game's ticks at the
+ * display's refresh rate. The next Psyz_VideoVSync goes back to the
+ * console's pacing.
+ *
+ * @param fps Frames a second; Psyz_VideoGetDisplayRate() for the display's.
+ */
+void Psyz_VideoPresent(double fps);
+
+/**
+ * @brief The refresh rate of the display the window is on
+ *
+ * @return Hz, or 0 when the platform doesn't know it.
+ */
+double Psyz_VideoGetDisplayRate(void);
+
+/**
  * @brief Get frame timing statistics
  *
  * @param stats Output structure to fill

@@ -293,6 +293,8 @@ static double drift_compensation = 0.0;
 static PsyzVsyncMode vsync_mode = PSYZ_VSYNC_AUTO;
 static PsyzDitherMode dither_mode = PSYZ_DITHER_AUTO;
 static bool use_driver_vsync = false;
+static bool backend_driver_vsync = false; // what the backend was last set to
+static double last_wait_target_us = 0.0;   // WaitFor's previous target
 static PsyzVideoStats gpu_stats = {0};
 
 static unsigned draw_grid_source_width = 1;
@@ -366,44 +368,62 @@ static double GetElapsedMicroseconds(Uint64 start, Uint64 end) {
     return ((double)(end - start) * 1000000.0) / (double)perf_frequency;
 }
 
+static void SetBackendVsync(bool enable) {
+    PlatformBackend_SetDriverVsync(enable);
+    backend_driver_vsync = enable;
+}
+
+// The refresh rate of the display the window is on (else the primary), or
+// 0 when SDL doesn't know it.
+static double DisplayRefreshRate(void) {
+    SDL_DisplayID display_id =
+        sdl3_window ? SDL_GetDisplayForWindow(sdl3_window) : 0;
+    if (!display_id) {
+        display_id = SDL_GetPrimaryDisplay();
+    }
+    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display_id);
+    return mode && mode->refresh_rate > 0.0f ? mode->refresh_rate : 0.0;
+}
+
+// Whether a display refreshing at `refresh` Hz shows `fps` frames a second
+// one per refresh (within 5 % of a frame's time).
+static bool RefreshMatches(double refresh, double fps) {
+    const double target_time = 1.0 / fps;
+    return fabs((1.0 / refresh) - target_time) < target_time * 0.05;
+}
+
 static void ConfigureVSync(double target_fps) {
     if (vsync_mode == PSYZ_VSYNC_ON) {
-        PlatformBackend_SetDriverVsync(true);
+        SetBackendVsync(true);
         use_driver_vsync = true;
         INFOF("vsync forced ON (driver VSync)");
         return;
     }
     if (vsync_mode == PSYZ_VSYNC_OFF) {
-        PlatformBackend_SetDriverVsync(false);
+        SetBackendVsync(false);
         use_driver_vsync = false;
         INFOF("vsync forced OFF (frame limiter)");
         return;
     }
     if (vsync_mode == PSYZ_VSYNC_LIMITLESS) {
-        PlatformBackend_SetDriverVsync(false);
+        SetBackendVsync(false);
         use_driver_vsync = false;
         INFOF("vsync forced OFF, internal frame limiter disabled");
         return;
     }
 
-    SDL_DisplayID display_id = SDL_GetPrimaryDisplay();
-    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display_id);
-    double detected_framerate = 60.0;
-    if (mode && mode->refresh_rate > 0.0f) {
-        detected_framerate = mode->refresh_rate;
+    double detected_framerate = DisplayRefreshRate();
+    if (detected_framerate <= 0.0) {
+        detected_framerate = 60.0;
     }
-
-    const double target_time = 1.0 / target_fps;
-    const double tolerance_us = target_time * 0.05;
-    bool can_use_driver_vsync =
-        fabs((1.0 / detected_framerate) - target_time) < tolerance_us;
+    bool can_use_driver_vsync = RefreshMatches(detected_framerate, target_fps);
 
     if (can_use_driver_vsync) {
-        PlatformBackend_SetDriverVsync(true);
+        SetBackendVsync(true);
         use_driver_vsync = true;
         INFOF("detected %.2f Hz monitor, use driver VSync", detected_framerate);
     } else {
-        PlatformBackend_SetDriverVsync(false);
+        SetBackendVsync(false);
         use_driver_vsync = false;
         INFOF("detected %.2f Hz monitor but targeting %.2f, use frame limiter",
               detected_framerate, target_fps);
@@ -521,13 +541,17 @@ static void Sdl3Common_Shutdown(void) {
     SDL_SetAtomicInt(&resume_audio_on_foreground, 0);
 }
 
-// Paces `frames` vertical blanks since the previous call. Driver VSync
-// already waited for one in the present, so it only needs the timer for the
-// rest.
-static void WaitForNextFrame(int frames) {
+// Waits until `target_us` has passed since the previous frame, unless the
+// driver's VSync already paced this one (`driver_paced`) or the vsync mode is
+// limitless, and records the frame's statistics. On the web it yields to the
+// browser `frames` times instead.
+static void WaitFor(double target_us, bool driver_paced, int frames) {
     Uint64 current_time = SDL_GetPerformanceCounter();
     double elapsed_us = GetElapsedMicroseconds(last_frame_time, current_time);
-    double target_us = target_frame_time_us * frames;
+    if (target_us != last_wait_target_us) {
+        drift_compensation = 0.0; // a new rate: the old error says nothing
+        last_wait_target_us = target_us;
+    }
 
 #ifdef PLATFORM_WEB
     // yield to browser
@@ -537,8 +561,7 @@ static void WaitForNextFrame(int frames) {
         Psyz_WebWaitForNextFrame();
     }
 #else
-    if ((!use_driver_vsync || frames > 1) &&
-        vsync_mode != PSYZ_VSYNC_LIMITLESS) {
+    if (!driver_paced && vsync_mode != PSYZ_VSYNC_LIMITLESS) {
         double time_to_wait_us = target_us - elapsed_us + drift_compensation;
 
         // only wait if we're ahead of schedule (not running slow)
@@ -586,6 +609,13 @@ static void WaitForNextFrame(int frames) {
     last_frame_time = frame_end_time;
 }
 
+// Paces `frames` vertical blanks since the previous call. Driver VSync
+// already waited for one in the present, so it only needs the timer for the
+// rest.
+static void WaitForNextFrame(int frames) {
+    WaitFor(target_frame_time_us * frames, use_driver_vsync && frames == 1, frames);
+}
+
 int Psyz_VideoVSync(int mode) {
     Uint32 now_us;
     unsigned short ret;
@@ -602,6 +632,9 @@ int Psyz_VideoVSync(int mode) {
         // draws them on exeque, which a game that never calls DrawSync per
         // frame does not reach: draw them before the frame goes out.
         Psyz_GpuExeque();
+        if (backend_driver_vsync != use_driver_vsync) {
+            SetBackendVsync(use_driver_vsync); // after Psyz_VideoPresent
+        }
         PlatformBackend_Present();
         PollEvents();
         WaitForNextFrame(mode > 1 ? mode : 1);
@@ -622,6 +655,28 @@ int Psyz_VideoSetVsyncMode(PsyzVsyncMode mode) {
 }
 
 PsyzVsyncMode Psyz_VideoGetVsyncMode(void) { return vsync_mode; }
+
+double Psyz_VideoGetDisplayRate(void) { return DisplayRefreshRate(); }
+
+void Psyz_VideoPresent(double fps) {
+    Sdl3Common_ApplyPendingTimingReset();
+    // The driver's VSync paces it when the display refreshes at about `fps`
+    // (or always, when forced on); otherwise the limiter does.
+    bool driver = vsync_mode == PSYZ_VSYNC_ON ||
+                  (vsync_mode == PSYZ_VSYNC_AUTO && fps > 0.0 &&
+                   RefreshMatches(DisplayRefreshRate() > 0.0
+                                      ? DisplayRefreshRate()
+                                      : 60.0,
+                                  fps));
+    Psyz_GpuExeque();
+    if (backend_driver_vsync != driver) {
+        SetBackendVsync(driver);
+    }
+    PlatformBackend_Present();
+    PollEvents();
+    WaitFor(fps > 0.0 ? 1000000.0 / fps : 0.0, driver || fps <= 0.0, 1);
+    last_vsync_us = (Uint32)(SDL_GetTicksNS() / 1000);
+}
 
 static int s_dither = 0;
 static inline int GetCurrentDither(void) {
