@@ -111,6 +111,20 @@ typedef struct {
  */
 int Psyz_PadsSetKeyboardMap(const PsyzKeyBinding* map, int count);
 
+/**
+ * @brief Keep the host's keyboard and gamepads from the game
+ *
+ * While @p hold is non-zero, the pads the keyboard and gamepads drive read as
+ * connected with nothing pressed and their sticks centred, for an overlay
+ * that takes the input meanwhile. Once released, a button still held from
+ * before reads as released until it is let go, so the key or button that
+ * closed the overlay does not reach the game. Escape doesn't quit while
+ * held. Input injected with Psyz_PadsSet (the debug server's) is not held.
+ *
+ * @param hold non-zero to hold the input, 0 to give it back
+ */
+void Psyz_PadsHold(int hold);
+
 #ifdef __cplusplus
 }
 #endif

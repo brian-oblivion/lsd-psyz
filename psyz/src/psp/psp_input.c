@@ -19,6 +19,10 @@ int Psyz_PadsSetKeyboardMap(const PsyzKeyBinding* map, int count) {
     return -1; // no keyboard
 }
 
+void Psyz_PadsHold(int hold) {
+    (void)hold; // no overlay
+}
+
 static u_long ReadButtons(unsigned int keys) {
     u_long pressed = 0;
     if (keys & PSP_CTRL_TRIANGLE) {
