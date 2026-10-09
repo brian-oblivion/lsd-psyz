@@ -1,6 +1,6 @@
 #version 450
 
-layout(location = 0) in ivec2 pos;  // SDL_GPU_VERTEXELEMENTFORMAT_SHORT2
+layout(location = 0) in vec3 pos;   // SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3: x, y, w
 layout(location = 1) in uvec4 tex;  // SDL_GPU_VERTEXELEMENTFORMAT_USHORT4
 layout(location = 2) in vec4 color; // SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM
 layout(location = 3) in uvec4 twin; // SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4
@@ -22,15 +22,21 @@ layout(location = 8) flat out uint indexMask;    // Mask for color index
 layout(location = 9) flat out uint dither;      // 1 dithers, 2 keeps 8 bits, 0 neither
 layout(location = 10) flat out ivec2 pageBase;   // texture page origin, in VRAM pixels
 layout(location = 11) flat out uvec4 texWindow;  // GP0(E2h) as {and.xy, or.zw}
+// a perspective-correct primitive (TPAGE_PRECISE) interpolates its UV with
+// w, but its colour across the screen as the console does
+layout(location = 12) noperspective out vec4 vertexColorAffine;
+layout(location = 13) flat out uint perspective;
 
 void main() {
     // a line's quad is already laid out around the pixel centres
     vec2 shift = (tex.w & 0x2000u) != 0u ? vec2(0.0) : samplePoint;
-    float x = ((float(pos.x) + drawOffset.x + shift.x) / (1024.0 / 2.0)) - 1.0;
-    float y = ((float(pos.y) + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;
+    float x = ((pos.x + drawOffset.x + shift.x) / (1024.0 / 2.0)) - 1.0;
+    float y = ((pos.y + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;
+    float w = (tex.w & 0x0800u) != 0u ? pos.z : 1.0;
+    perspective = (tex.w & 0x0800u) != 0u ? 1u : 0u;
     // SDL_GPU NDC y=-1 is the bottom while texture row 0 is the top; negate Y
     // so VRAM row 0 lands on texture row 0, like the GL FBO convention.
-    gl_Position = vec4(x, -y, 0.0, 1.0);
+    gl_Position = vec4(x * w, -y * w, 0.0, w);
     // gouraud colors
     vertexColor = color;
     // select the right texture coords based on the tpage
@@ -68,4 +74,5 @@ void main() {
     }
     pageBase = ivec2(int((tpage % 32u) % 16u) * 64, int((tpage % 32u) / 16u) * 256);
     texWindow = twin;
+    vertexColorAffine = vertexColor;
 }

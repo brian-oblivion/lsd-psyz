@@ -6,6 +6,7 @@
 #include <psyz/log.h>
 #include <libgpu.h>
 #include "../internal.h"
+#include "../precise.h"
 
 // This GTE implementation should be accurate. Results are covered via the same
 // unit tests that have been confirmed to be green on a real PlayStation 1.
@@ -1814,9 +1815,47 @@ void Psyz_GteSetScreenXScale(int scale) {
 
 int Psyz_GteGetScreenXScale(void) { return sx_scale; }
 
-// Perspective transformation of one vertex into caller locals.
+// Precise geometry (src/precise.h): the precise vertex behind each entry of
+// the screen-XY FIFO, SXY0, SXY1, SXY2 and SXYP.
+static PreciseVertex prec_sxy[4];
+
+// The unrounded screen position and depth of the vertex RTP_VERTEX has just
+// projected, from the full-precision MAC and a true division. The position
+// is the true one where the GTE's isn't a rounding of it (SZ saturated far
+// away, a division overflow near the eye, SX/SY or IR1/IR2 clamped), so that
+// a vertex is drawn in one place by every polygon that shares it. None
+// (w = 0) for sf 0 or a vertex at or behind the eye, which is drawn where
+// the GTE put it.
+static void PreciseProject(
+    PreciseVertex* pv, int sf, int x, int y, int z, int sx, int sy) {
+    double vx, vy, vz, px, py;
+    pv->w = 0.0f;
+    if (!sf) {
+        return;
+    }
+    vz = (double)M.t[2] * 4096.0 + (double)M.m[2][0] * x +
+         (double)M.m[2][1] * y + (double)M.m[2][2] * z;
+    if (vz < 4096.0) {
+        return;
+    }
+    vx = (double)M.t[0] * 4096.0 + (double)M.m[0][0] * x +
+         (double)M.m[0][1] * y + (double)M.m[0][2] * z;
+    vy = (double)M.t[1] * 4096.0 + (double)M.m[1][0] * x +
+         (double)M.m[1][1] * y + (double)M.m[1][2] * z;
+    px = OFX + (double)sx_scale / 65536.0 * (double)H * vx / vz;
+    py = OFY + (double)H * vy / vz;
+    // past the GPU's coordinate range: the GTE's clamped one
+    if (px < -0x8000 || px > 0x7FFF || py < -0x8000 || py > 0x7FFF) {
+        px = sx;
+        py = sy;
+    }
+    pv->x = (float)px;
+    pv->y = (float)py;
+    pv->w = (float)(vz / 4096.0);
+}
+
 #define RTP_VERTEX(                                                            \
-    sf, lm, x, y, z, f, div, mac1, mac2, mac3, ir1, ir2, ir3, sx, sy, sz)      \
+    sf, lm, x, y, z, f, div, mac1, mac2, mac3, ir1, ir2, ir3, sx, sy, sz, pv)  \
     do {                                                                       \
         int rv_x = (x), rv_y = (y), rv_z = (z);                                \
         int rv_h1, rv_h2, rv_h3, rv_l1, rv_l2, rv_l3;                          \
@@ -1847,6 +1886,9 @@ int Psyz_GteGetScreenXScale(void) { return sx_scale; }
         (sy) = OFY + MUL_DIV_HI(div, ir2);                                     \
         MAC0_OVF(sy, f);                                                       \
         SAT_FLAG(sy, sy, -0x400, 0x3FF, FLAG_SY2_SAT, f);                      \
+        if (PRECISE_ON) {                                                      \
+            PreciseProject(&(pv), sf, rv_x, rv_y, rv_z, sx, sy);               \
+        }                                                                      \
     } while (0)
 
 #define RTP_STORE_MAC_IR()                                                     \
@@ -1865,9 +1907,15 @@ int Psyz_GteGetScreenXScale(void) { return sx_scale; }
         FLAG = 0;                                                              \
         int rt_div, rt_mac1, rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3;         \
         int rt_sx, rt_sy, rt_sz;                                               \
+        PreciseVertex rt_pv;                                                   \
         RTP_VERTEX(sf, lm, V0.vx, V0.vy, V0.vz, FLAG, rt_div, rt_mac1,         \
                    rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3, rt_sx, rt_sy,     \
-                   rt_sz);                                                     \
+                   rt_sz, rt_pv);                                              \
+        if (PRECISE_ON) {                                                      \
+            prec_sxy[0] = prec_sxy[1];                                         \
+            prec_sxy[1] = prec_sxy[2];                                         \
+            prec_sxy[2] = prec_sxy[3] = rt_pv;                                 \
+        }                                                                      \
         SZ0 = SZ1;                                                             \
         SZ1 = SZ2;                                                             \
         SZ2 = SZ3;                                                             \
@@ -1895,21 +1943,24 @@ int Psyz_GteGetScreenXScale(void) { return sx_scale; }
         SZ0 = SZ3;                                                             \
         RTP_VERTEX(sf, lm, V0.vx, V0.vy, V0.vz, FLAG, rt_div, rt_mac1,         \
                    rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3, rt_sx, rt_sy,     \
-                   rt_sz);                                                     \
+                   rt_sz, prec_sxy[0]);                                        \
         SZ1 = (unsigned short)rt_sz;                                           \
         SX0 = (short)rt_sx;                                                    \
         SY0 = (short)rt_sy;                                                    \
         (sxy0) = SXY(rt_sx, rt_sy);                                            \
         RTP_VERTEX(sf, lm, V1.vx, V1.vy, V1.vz, FLAG, rt_div, rt_mac1,         \
                    rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3, rt_sx, rt_sy,     \
-                   rt_sz);                                                     \
+                   rt_sz, prec_sxy[1]);                                        \
         SZ2 = (unsigned short)rt_sz;                                           \
         SX1 = (short)rt_sx;                                                    \
         SY1 = (short)rt_sy;                                                    \
         (sxy1) = SXY(rt_sx, rt_sy);                                            \
         RTP_VERTEX(sf, lm, V2.vx, V2.vy, V2.vz, FLAG, rt_div, rt_mac1,         \
                    rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3, rt_sx, rt_sy,     \
-                   rt_sz);                                                     \
+                   rt_sz, prec_sxy[2]);                                        \
+        if (PRECISE_ON) {                                                      \
+            prec_sxy[3] = prec_sxy[2];                                         \
+        }                                                                      \
         SZ3 = (unsigned short)rt_sz;                                           \
         SX2 = (short)rt_sx;                                                    \
         SY2 = (short)rt_sy;                                                    \
@@ -2437,18 +2488,34 @@ VECTOR* Square0(VECTOR* v0, VECTOR* v1) {
     return v1;
 }
 
-void Psyz_GteStsxy(unsigned int* out) { *out = pack_xy(SXP, SYP); }
+// Each SXY store also records its precise vertex at the address it went to.
+#define PRECISE_PUT(addr, i)                                                   \
+    do {                                                                       \
+        if (PRECISE_ON) {                                                      \
+            Precise_Put(addr, &prec_sxy[i]);                                   \
+        }                                                                      \
+    } while (0)
+
+void Psyz_GteStsxy(unsigned int* out) {
+    *out = pack_xy(SXP, SYP);
+    PRECISE_PUT(out, 3);
+}
 
 void Psyz_GteStsxy3(
     unsigned int* out0, unsigned int* out1, unsigned int* out2) {
     *out0 = pack_xy(SX0, SY0);
     *out1 = pack_xy(SX1, SY1);
     *out2 = pack_xy(SX2, SY2);
+    PRECISE_PUT(out0, 0);
+    PRECISE_PUT(out1, 1);
+    PRECISE_PUT(out2, 2);
 }
 
 void Psyz_GteStsxy01c(unsigned int* out) {
     out[0] = pack_xy(SX0, SY0);
     out[1] = pack_xy(SX1, SY1);
+    PRECISE_PUT(&out[0], 0);
+    PRECISE_PUT(&out[1], 1);
 }
 
 void Psyz_GteStsxy3Gt3(void* polyGte) {
@@ -2459,6 +2526,9 @@ void Psyz_GteStsxy3Gt3(void* polyGte) {
     poly->y1 = SY1;
     poly->x2 = SX2;
     poly->y2 = SY2;
+    PRECISE_PUT(&poly->x0, 0);
+    PRECISE_PUT(&poly->x1, 1);
+    PRECISE_PUT(&poly->x2, 2);
 }
 
 void Psyz_GteAvsz3(void) { AVSZ3(); }
@@ -2498,9 +2568,15 @@ void Psyz_GteStsxy3G3(void* polyGte) {
     poly->y1 = SY1;
     poly->x2 = SX2;
     poly->y2 = SY2;
+    PRECISE_PUT(&poly->x0, 0);
+    PRECISE_PUT(&poly->x1, 1);
+    PRECISE_PUT(&poly->x2, 2);
 }
 
-void Psyz_GteStsxy2(unsigned int* out) { *out = pack_xy(SX2, SY2); }
+void Psyz_GteStsxy2(unsigned int* out) {
+    *out = pack_xy(SX2, SY2);
+    PRECISE_PUT(out, 2);
+}
 
 // The first three vertices of a primitive get SXY0-SXY2, the screen-XY FIFO,
 // whatever lies between them in the primitive's layout.
@@ -2513,6 +2589,9 @@ void Psyz_GteStsxy2(unsigned int* out) { *out = pack_xy(SX2, SY2); }
         poly->y1 = SY1;                                                        \
         poly->x2 = SX2;                                                        \
         poly->y2 = SY2;                                                        \
+        PRECISE_PUT(&poly->x0, 0);                                             \
+        PRECISE_PUT(&poly->x1, 1);                                             \
+        PRECISE_PUT(&poly->x2, 2);                                             \
     } while (0)
 
 void Psyz_GteStsxy3F3(void* polyF3) { STSXY3_PRIM(POLY_F3, polyF3); }
@@ -2596,6 +2675,9 @@ void Psyz_GteStsz4c(unsigned int* out) {
 
 long NormalClip(long sxy0, long sxy1, long sxy2) {
     // TODO can this be simplified with an union?
+    if (PRECISE_ON) {
+        prec_sxy[0].w = prec_sxy[1].w = prec_sxy[2].w = 0.0f;
+    }
     SX0 = (short)sxy0;
     SY0 = (short)(sxy0 >> 16);
     SX1 = (short)sxy1;
@@ -2736,6 +2818,7 @@ long RotTransPers(SVECTOR* v0, int* sxy, int* p, int* flag) {
     ir0 = IR0;
     z = SZ3 >> 2;
     *(unsigned int*)sxy = s;
+    PRECISE_PUT(sxy, 3);
     *p = ir0;
     *flag = (int)fl;
     return z;
@@ -2756,6 +2839,9 @@ long RotTransPers3(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, int* sxy0, int* sxy1,
     *(unsigned int*)sxy0 = s0;
     *(unsigned int*)sxy1 = s1;
     *(unsigned int*)sxy2 = s2;
+    PRECISE_PUT(sxy0, 0);
+    PRECISE_PUT(sxy1, 1);
+    PRECISE_PUT(sxy2, 2);
     *p = ir0;
     *flag = (int)fl;
     return z;
@@ -2787,6 +2873,9 @@ long RotAverage3(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, int* sxy0, int* sxy1,
     *(unsigned int*)sxy0 = s0;
     *(unsigned int*)sxy1 = s1;
     *(unsigned int*)sxy2 = s2;
+    PRECISE_PUT(sxy0, 0);
+    PRECISE_PUT(sxy1, 1);
+    PRECISE_PUT(sxy2, 2);
     *flag = (int)fl;
     *p = ir0;
     return otz;
@@ -2795,6 +2884,7 @@ long RotAverage3(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, int* sxy0, int* sxy1,
 long RotAverage4(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, SVECTOR* v3, int* sxy0,
                  int* sxy1, int* sxy2, int* sxy3, int* p, int* flag) {
     unsigned s0, s1, s2, s3, fl1, fl2;
+    PreciseVertex prec0;
     int ir0;
     long otz;
     V0 = *v0;
@@ -2802,6 +2892,7 @@ long RotAverage4(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, SVECTOR* v3, int* sxy0,
     V2 = *v2;
     RTPT_BODY(1, 0, s0, s1, s2);
     fl1 = FLAG;
+    prec0 = prec_sxy[0];
     V0 = *v3;
     RTPS_BODY(1, 0, s3);
     fl2 = FLAG;
@@ -2812,6 +2903,12 @@ long RotAverage4(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, SVECTOR* v3, int* sxy0,
     *(unsigned int*)sxy1 = s1;
     *(unsigned int*)sxy2 = s2;
     *(unsigned int*)sxy3 = s3;
+    if (PRECISE_ON) {
+        Precise_Put(sxy0, &prec0);
+    }
+    PRECISE_PUT(sxy1, 0);
+    PRECISE_PUT(sxy2, 1);
+    PRECISE_PUT(sxy3, 2);
     *p = ir0;
     *flag = (int)(fl1 | fl2);
     return otz;
@@ -2833,6 +2930,9 @@ long RotAverageNclip3(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, int* sxy0,
         *(unsigned int*)sxy0 = s0;
         *(unsigned int*)sxy1 = s1;
         *(unsigned int*)sxy2 = s2;
+        PRECISE_PUT(sxy0, 0);
+        PRECISE_PUT(sxy1, 1);
+        PRECISE_PUT(sxy2, 2);
         *p = ir0;
         *otz = OTZ;
         return MAC0;
@@ -2845,11 +2945,13 @@ long RotAverageNclip4(
     SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, SVECTOR* v3, int* sxy0, int* sxy1,
     int* sxy2, int* sxy3, int* p, int* otz, int* flag) {
     unsigned s0, s1, s2, s3, fl1, fl2;
+    PreciseVertex prec0;
     V0 = *v0;
     V1 = *v1;
     V2 = *v2;
     RTPT_BODY(1, 0, s0, s1, s2);
     fl1 = FLAG;
+    prec0 = prec_sxy[0];
     NCLIP();
     if (MAC0 > 0) {
         int ir0;
@@ -2862,6 +2964,12 @@ long RotAverageNclip4(
         *(unsigned int*)sxy1 = s1;
         *(unsigned int*)sxy2 = s2;
         *(unsigned int*)sxy3 = s3;
+        if (PRECISE_ON) {
+            Precise_Put(sxy0, &prec0);
+        }
+        PRECISE_PUT(sxy1, 0);
+        PRECISE_PUT(sxy2, 1);
+        PRECISE_PUT(sxy3, 2);
         *p = ir0;
         *flag = (int)(fl1 | fl2);
         *otz = OTZ;
@@ -3063,15 +3171,19 @@ void Psyz_GteDataWrite(unsigned idx, unsigned int v) {
         break;
     case 12:
         unpack_xy(v, &SX0, &SY0);
+        prec_sxy[0].w = 0.0f;
         break;
     case 13:
         unpack_xy(v, &SX1, &SY1);
+        prec_sxy[1].w = 0.0f;
         break;
     case 14:
         unpack_xy(v, &SX2, &SY2);
+        prec_sxy[2].w = 0.0f;
         break;
     case 15:
         unpack_xy(v, &SXP, &SYP);
+        prec_sxy[3].w = 0.0f;
         break;
     case 16:
         SZ0 = (u16)(v & 0xFFFF);

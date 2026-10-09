@@ -1,6 +1,6 @@
 #version 450
 
-layout(location = 0) in vec4 vertexColor;
+layout(location = 0) in vec4 vertexColorSmooth;
 layout(location = 1) in vec2 rawUV;
 layout(location = 2) flat in uint tpage;
 layout(location = 3) flat in uint clut;
@@ -12,6 +12,8 @@ layout(location = 8) flat in uint indexMask;
 layout(location = 9) flat in uint dither;
 layout(location = 10) flat in ivec2 pageBase;
 layout(location = 11) flat in uvec4 texWindow;
+layout(location = 12) noperspective in vec4 vertexColorAffine;
+layout(location = 13) flat in uint perspective;
 
 layout(set = 2, binding = 0) uniform sampler2D texVram;
 
@@ -47,6 +49,7 @@ vec3 applyDither(vec3 c) {
 }
 
 void main() {
+    vec4 vertexColor = perspective != 0u ? vertexColorAffine : vertexColorSmooth;
     vec4 texColor;
     if (textureMode == 0u) { // untextured
         texColor = vec4(1, 1, 1, 2);

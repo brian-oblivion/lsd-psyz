@@ -23,6 +23,10 @@ if(NOT PSP)
 endif()
 
 option(GTE_USE_HW_SQRT "Use hardware-accelerated sqrt (C math library)" OFF)
+# Psyz_VideoSetGeometry's sub-pixel and perspective-correct drawing of what
+# the GTE projects. Off, the GTE and GPU queue carry no shadow vertices and
+# only the console's geometry can be set.
+option(PSYZ_PRECISE_GEOMETRY "Build in precise geometry (Psyz_VideoSetGeometry)" ON)
 
 set(PSYZ_SOURCES
     src/platform/psyz.c
@@ -45,6 +49,7 @@ set(PSYZ_SOURCES
     ../decomp/src/libgte/ratan.c
     src/psyz/libgte.c
     src/psyz/libgte_div.c
+    src/psyz/precise.c
     src/psyz/libgs.c
     src/psyz/libcd.c
     ../decomp/src/libcd/iso9660.c
@@ -368,6 +373,9 @@ endif()
 
 add_library(psyz STATIC ${PSYZ_SOURCES})
 target_compile_definitions(psyz PUBLIC __psyz)
+if(PSYZ_PRECISE_GEOMETRY)
+    target_compile_definitions(psyz PRIVATE PSYZ_PRECISE_GEOMETRY)
+endif()
 if(EMSCRIPTEN)
     target_compile_definitions(psyz PUBLIC PLATFORM_WEB=1)
 endif()

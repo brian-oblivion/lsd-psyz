@@ -2,8 +2,10 @@
 #include <libgpu.h>
 #include "../../../decomp/src/libgpu/libgpu_private.h"
 #include <psyz/log.h>
+#include <stdbool.h>
 #include "../draw.h"
 #include "../internal.h"
+#include "../precise.h"
 
 // The GPU is a FIFO: the register reflects what it has consumed by the GPU the
 // moment it's queried. The problem with the current PsyZ implementation is
@@ -29,6 +31,11 @@ static void GPU_read_image() { NOT_IMPLEMENTED; }
 
 static int queue_len = 0;
 static u_long queue_buf[0x4000];
+// Precise geometry: the precise vertex of each queue_buf word, looked up
+// while the packet is still at the address the GTE stored it to. Valid while
+// every packet in the queue went in with precise geometry on.
+static PreciseVertex queue_prec[LEN(queue_buf)];
+static bool queue_prec_valid = true;
 
 typedef struct {
     PsyzGpuCommandHandler handler;
@@ -52,7 +59,8 @@ int Psyz_GpuSetHorizontalGrid(
     return Draw_SetHorizontalGrid(source_width, target_width);
 }
 
-static void DispatchPackets(u_long* buf, int len) {
+// prec: the precise vertex of each word of buf, or NULL
+static void DispatchPackets(u_long* buf, int len, const PreciseVertex* prec) {
     RECT rect;
     unsigned int x, y;
     for (int i = 0; i < len; i++) {
@@ -115,7 +123,9 @@ static void DispatchPackets(u_long* buf, int len) {
             break;
         default:
             if (code >= 0x20 && code < 0x80) {
+                precise_draw_words = prec ? &prec[i] : NULL;
                 i += Draw_PushPrim(&buf[i], len - i) - 1;
+                precise_draw_words = NULL;
                 break;
             }
             if (user_gpu_commands[code].handler) {
@@ -141,21 +151,37 @@ int Psyz_GpuExeque() {
     Draw_FlushBuffer();
     Draw_ResetBuffer();
     if (queue_len > 0) {
-        DispatchPackets(queue_buf, queue_len);
+        DispatchPackets(queue_buf, queue_len,
+                        PRECISE_ON && queue_prec_valid ? queue_prec : NULL);
         Draw_FlushBuffer();
     }
     Draw_ExequeSync();
     queue_len = 0;
+    queue_prec_valid = true;
     return queue_len;
+}
+
+// The precise vertices of a primitive's words, by their address.
+static void LookupPrecise(const u32* words, int len, PreciseVertex* out) {
+    for (int i = 0; i < len; i++) {
+        Precise_Get(&words[i], &out[i]);
+    }
 }
 
 static void GPU_Enqueue(u_long* packets) {
     DR_ENV* env = (DR_ENV*)packets;
     if (sizeof(u_long) == 4) {
         // fast path for 32-bit systems
+        PreciseVertex prec[0x100]; // a packet's len is 8 bits
         while (1) {
             if (env->len > 0) {
-                DispatchPackets((u_long*)env->code, (int)env->len);
+                int code = getcode(env) & ~3;
+                bool lookup = PRECISE_ON && code >= 0x20 && code < 0x80;
+                if (lookup) {
+                    LookupPrecise((u32*)env->code, (int)env->len, prec);
+                }
+                DispatchPackets(
+                    (u_long*)env->code, (int)env->len, lookup ? prec : NULL);
             }
             if (isendprim(env)) {
                 break;
@@ -190,12 +216,24 @@ static void GPU_Enqueue(u_long* packets) {
                 for (u_long i = 0; i < env->len; i++) {
                     queue_buf[queue_len + i] = prim_data[i];
                 }
+                if (PRECISE_ON) {
+                    LookupPrecise(
+                        prim_data, (int)env->len, &queue_prec[queue_len]);
+                }
             } else if (env->len > 0) {
                 // TODO this is a temporary solution:
                 // if gpu commands get merged with primitives, this will not
                 // work
                 memcpy(queue_buf + queue_len, env->code,
                        env->len * sizeof(u_long));
+                if (PRECISE_ON) {
+                    for (u_long i = 0; i < env->len; i++) {
+                        queue_prec[queue_len + i].w = 0.0f;
+                    }
+                }
+            }
+            if (!PRECISE_ON) {
+                queue_prec_valid = false;
             }
         }
         queue_len += (int)env->len;

@@ -169,7 +169,7 @@ static SDL_GPUGraphicsPipeline* CreatePsxPipeline(
     const SDL_GPUVertexAttribute attribs[] = {
         {.location = 0,
          .buffer_slot = 0,
-         .format = SDL_GPU_VERTEXELEMENTFORMAT_SHORT2,
+         .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
          .offset = offsetof(Vertex, x)},
         {.location = 1,
          .buffer_slot = 0,
@@ -237,7 +237,7 @@ static SDL_GPUGraphicsPipeline* CreateClearPipeline(
     const SDL_GPUVertexAttribute attribs[] = {
         {.location = 0,
          .buffer_slot = 0,
-         .format = SDL_GPU_VERTEXELEMENTFORMAT_SHORT2,
+         .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,
          .offset = offsetof(Vertex, x)},
         {.location = 1,
          .buffer_slot = 0,
@@ -1106,6 +1106,7 @@ int Draw_PushPrim(u_long* packets, int max_len) {
         v->r = v->g = v->b = 0x80;
     }
     v->a = code & SEMITRANSP ? 0x80 : 0xFF;
+    PreciseBegin(packets);
     packets++;
     len--;
     if (isPoly) {
@@ -1155,6 +1156,9 @@ int Draw_PushPrim(u_long* packets, int max_len) {
             }
 
             SET_TC_ALL(vertex_cur, tpage, clut);
+            if (precise_draw_words) {
+                PreciseApply(vertex_cur, nVertices);
+            }
             Draw_EnqueueBuffer(nVertices, nIndices);
         } else {
             // shouldn't happen on a normal PSX application

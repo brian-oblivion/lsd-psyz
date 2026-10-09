@@ -12,6 +12,7 @@
 #include <psyz/overlay.h>
 #include <psyz/overlay_sdl3.h>
 #include "../internal.h"
+#include "../precise.h"
 #ifdef PLATFORM_IOS
 #include "../ios/ios_platform.h"
 #endif
@@ -637,6 +638,7 @@ int Psyz_VideoVSync(int mode) {
             SetBackendVsync(use_driver_vsync); // after Psyz_VideoPresent
         }
         PlatformBackend_Present();
+        Precise_NextFrame();
         PollEvents();
         WaitForNextFrame(mode > 1 ? mode : 1);
         last_vsync_us = (Uint32)(SDL_GetTicksNS() / 1000);
@@ -674,6 +676,7 @@ void Psyz_VideoPresent(double fps) {
         SetBackendVsync(driver);
     }
     PlatformBackend_Present();
+    Precise_NextFrame();
     PollEvents();
     WaitFor(fps > 0.0 ? 1000000.0 / fps : 0.0, driver || fps <= 0.0, 1);
     last_vsync_us = (Uint32)(SDL_GetTicksNS() / 1000);
@@ -1166,8 +1169,11 @@ static void PollEvents(void) {
 #endif
 }
 
+// x, y are in VRAM pixels: whole ones but for precise geometry's vertices.
+// w is the vertex's depth for a perspective-correct primitive (TPAGE_PRECISE)
+// and ignored otherwise.
 typedef struct {
-    short x, y;
+    float x, y, w;
     unsigned short u, v, c, t;
     unsigned char r, g, b, a;
     unsigned int twin;
@@ -1178,6 +1184,7 @@ typedef struct {
 #define TPAGE_DITHER 0x4000    // flag a dithered primitive
 #define TPAGE_LINE 0x2000      // flag a line, drawn as a quad
 #define TPAGE_FULLCOLOR 0x1000 // flag a primitive kept at 8 bits per channel
+#define TPAGE_PRECISE 0x0800   // flag a perspective-correct primitive (w)
 
 #define VRGBA(p) (*(unsigned int*)(&((p).r)))
 #define SET_TC(p, tpage, clut)                                                 \
@@ -1232,13 +1239,50 @@ static void Draw_EnqueueBuffer(int vertices, int indices) {
 // real hardware use XY coords as signed 11-bit
 static short s11(short v) { return (short)(((v & 0x7FF) ^ 1024) - 1024); }
 
+// Precise geometry: the precise vertex of each of the polygon's vertices
+// being written, from precise_draw_words (w = 0: none).
+static const u_long* prec_packets;
+static PreciseVertex prec_poly[4];
+
+static inline void PreciseBegin(u_long* packets) {
+    prec_packets = packets;
+    prec_poly[0].w = prec_poly[1].w = prec_poly[2].w = prec_poly[3].w = 0.0f;
+}
+
+// Once the polygon's n vertices are in v: those with a precise vertex are
+// drawn there, and if all have one, with perspective from their depth.
+static inline void PreciseApply(Vertex* v, int n) {
+    bool all = true;
+    int i;
+    for (i = 0; i < n; i++) {
+        if (prec_poly[i].w > 0.0f) {
+            v[i].x = prec_poly[i].x;
+            v[i].y = prec_poly[i].y;
+        } else {
+            all = false;
+        }
+    }
+    if (all && precise_mode == PSYZ_GEOMETRY_PERSPECTIVE) {
+        for (i = 0; i < n; i++) {
+            v[i].w = prec_poly[i].w;
+            v[i].t |= TPAGE_PRECISE;
+        }
+    }
+}
+
 static int writePacket(Vertex* v, int code, int n, u_long* packet, u16* pOut) {
     int w;
+    short x, y;
     if (!n) {
         return 0;
     }
-    v->x = s11(((short*)packet)[0]);
-    v->y = s11(((short*)packet)[1]);
+    x = ((short*)packet)[0];
+    y = ((short*)packet)[1];
+    v->x = s11(x);
+    v->y = s11(y);
+    if (precise_draw_words && v->x == x && v->y == y) {
+        prec_poly[v - vertex_cur] = precise_draw_words[packet - prec_packets];
+    }
     packet++;
     n--;
     if (!n) {
