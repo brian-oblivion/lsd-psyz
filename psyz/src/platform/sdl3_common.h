@@ -194,6 +194,7 @@ static Uint64 finish_time = 0;
 static double drift_compensation = 0.0;
 static PsyzVsyncMode vsync_mode = PSYZ_VSYNC_AUTO;
 static PsyzDitherMode dither_mode = PSYZ_DITHER_AUTO;
+static PsyzColorDepth color_depth = PSYZ_COLOR_DEPTH_15;
 static bool use_driver_vsync = false;
 static PsyzVideoStats gpu_stats = {0};
 
@@ -491,7 +492,7 @@ PsyzVsyncMode Psyz_VideoGetVsyncMode(void) { return vsync_mode; }
 
 static int s_dither = 0;
 static inline int GetCurrentDither(void) {
-    if (dither_mode == PSYZ_DITHER_OFF) {
+    if (dither_mode == PSYZ_DITHER_OFF || color_depth == PSYZ_COLOR_DEPTH_24) {
         return 0;
     }
     return s_dither;
@@ -520,6 +521,17 @@ int Psyz_VideoSetDitheringMode(PsyzDitherMode mode) {
 }
 
 PsyzDitherMode Psyz_VideoGetDitheringMode(void) { return dither_mode; }
+
+int Psyz_VideoSetColorDepth(PsyzColorDepth depth) {
+    if (depth != PSYZ_COLOR_DEPTH_15 && depth != PSYZ_COLOR_DEPTH_24) {
+        return -1;
+    }
+    // each primitive carries the depth it was queued with
+    color_depth = depth;
+    return 0;
+}
+
+PsyzColorDepth Psyz_VideoGetColorDepth(void) { return color_depth; }
 
 int Psyz_VideoStats(PsyzVideoStats* stats) {
     if (!stats || !is_platform_init_successful) {

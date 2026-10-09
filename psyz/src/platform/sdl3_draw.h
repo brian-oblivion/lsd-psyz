@@ -33,10 +33,14 @@ typedef struct {
 // ===== SDL3 reserved TPAGE flags, invalid on real hardware =====
 #define TPAGE_NOTEXTURE 0x8000 // flag untextured poly
 #define TPAGE_DITHER 0x4000    // flag a dithered primitive
+#define TPAGE_FULLCOLOR 0x1000 // flag a primitive kept at 8 bits per channel
 
 #define VRGBA(p) (*(unsigned int*)(&((p).r)))
 #define SET_TC(p, tpage, clut)                                                 \
-    (p)->t = (u16)(tpage), (p)->c = (u16)(clut), (p)->twin = cur_twin;
+    (p)->t =                                                                   \
+        (u16)((tpage) |                                                        \
+              (color_depth == PSYZ_COLOR_DEPTH_24 ? TPAGE_FULLCOLOR : 0)),     \
+    (p)->c = (u16)(clut), (p)->twin = cur_twin;
 #define SET_TC_ALL(p, t, c)                                                    \
     SET_TC(p, t, c)                                                            \
     SET_TC(&(p)[1], t, c) SET_TC(&(p)[2], t, c) SET_TC(&(p)[3], t, c)

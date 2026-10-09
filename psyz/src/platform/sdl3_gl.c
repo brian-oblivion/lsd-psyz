@@ -55,7 +55,7 @@ static const char vertex_shader_body[] = {
     "flat out uint texelShift;\n"   // Right shift for texel X
     "flat out uint indexShift;\n"   // Shift for index extraction
     "flat out uint indexMask;\n"    // Mask for color index
-    "flat out uint dither;\n"       // 1 when this primitive dithers
+    "flat out uint dither;\n"       // 1 dithers, 2 keeps 8 bits, 0 neither
     "flat out ivec2 pageBase;\n"    // texture page origin, in VRAM pixels
     "flat out uvec4 texWindow;\n"   // GP0(E2h) as {and.xy, or.zw}
     "\n"
@@ -69,7 +69,9 @@ static const char vertex_shader_body[] = {
     "    clut = uint(tex.z);\n"
     "    uint texWord = uint(tex.w);\n"
     "    tpage = texWord & 0x1FFu;\n"
-    "    dither = (texWord & 0x4000u) != 0u ? 1u : 0u;\n"
+    "    dither = (texWord & 0x4000u) != 0u   ? 1u\n"
+    "             : (texWord & 0x1000u) != 0u ? 2u\n"
+    "                                         : 0u;\n"
     "    rawUV = tex.xy;\n"
     // Determine texture mode and pre-compute parameters
     "    subPixelMask = 0u;\n"
@@ -137,7 +139,7 @@ static const char fragment_shader_body[] = {
     "    -3.0, +1.0, -4.0, +0.0,"
     "    +3.0, -1.0, +2.0, -2.0);\n"
     "vec3 applyDither(vec3 c) {\n"
-    "    if (dither == 0u) return c;\n"
+    "    if (dither != 1u) return c;\n"
     "    int dx = int(gl_FragCoord.x) & 3;\n"
     "    int dy = int(gl_FragCoord.y) & 3;\n"
     "    float off = ditherMatrix[dy][dx];\n"
@@ -183,8 +185,13 @@ static const char fragment_shader_body[] = {
     "        vec3 col8 = min(floor(vertexColor.rgb * 127.5 + 0.5), "
     "vec3(255.0));\n"
     "        vec3 prod8 = min(tex5 * col8 / 16.0, vec3(255.0));\n"
-    "        modColor = dither != 0u ? prod8 / 255.0\n"
-    "                                : floor(prod8 / 8.0) / 31.0;\n"
+    "        if (dither == 2u) {\n"
+    // 24-bit: the texel widened so 31 is white, (tex * col8) >> 7
+    "            modColor = min(tex5 / 31.0 * col8 / 128.0, vec3(1.0));\n"
+    "        } else {\n"
+    "            modColor = dither != 0u ? prod8 / 255.0\n"
+    "                                    : floor(prod8 / 8.0) / 31.0;\n"
+    "        }\n"
     "    }\n"
     "    modColor = applyDither(modColor);\n"
     // pre-multiplied alpha output for GL_ONE, GL_ONE_MINUS_SRC_ALPHA blending
