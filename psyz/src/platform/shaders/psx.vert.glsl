@@ -19,7 +19,7 @@ layout(location = 5) flat out uint subPixelMask; // Sub-pixel mask (8-bit:1, 4-b
 layout(location = 6) flat out uint texelShift;   // Right shift for texel X
 layout(location = 7) flat out uint indexShift;   // Shift for index extraction
 layout(location = 8) flat out uint indexMask;    // Mask for color index
-layout(location = 9) flat out uint dither;      // 1 when this primitive dithers
+layout(location = 9) flat out uint dither;      // 1 dithers, 2 keeps 8 bits, 0 neither
 layout(location = 10) flat out ivec2 pageBase;   // texture page origin, in VRAM pixels
 layout(location = 11) flat out uvec4 texWindow;  // GP0(E2h) as {and.xy, or.zw}
 
@@ -37,7 +37,9 @@ void main() {
     clut = tex.z;
     uint texWord = tex.w;
     tpage = texWord & 0x1FFu;
-    dither = (texWord & 0x4000u) != 0u ? 1u : 0u;
+    dither = (texWord & 0x4000u) != 0u   ? 1u
+             : (texWord & 0x1000u) != 0u ? 2u
+                                         : 0u;
     rawUV = vec2(tex.xy);
     // Determine texture mode and pre-compute parameters
     subPixelMask = 0u;

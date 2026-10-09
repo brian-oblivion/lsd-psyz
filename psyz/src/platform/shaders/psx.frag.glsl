@@ -37,7 +37,7 @@ const mat4 ditherMatrix = mat4(
     -3.0, +1.0, -4.0, +0.0,
     +3.0, -1.0, +2.0, -2.0);
 vec3 applyDither(vec3 c) {
-    if (dither == 0u) return c;
+    if (dither != 1u) return c;
     int dx = int(gl_FragCoord.x) & 3;
     int dy = int(gl_FragCoord.y) & 3;
     float off = ditherMatrix[dy][dx];
@@ -79,8 +79,13 @@ void main() {
         vec3 tex5 = floor(texColor.rgb * 31.0 + 0.5);
         vec3 col8 = min(floor(vertexColor.rgb * 127.5 + 0.5), vec3(255.0));
         vec3 prod8 = min(tex5 * col8 / 16.0, vec3(255.0));
-        modColor = dither != 0u ? prod8 / 255.0
-                                : floor(prod8 / 8.0) / 31.0;
+        if (dither == 2u) {
+            // 24-bit: the texel widened so 31 is white, (tex * col8) >> 7
+            modColor = min(tex5 / 31.0 * col8 / 128.0, vec3(1.0));
+        } else {
+            modColor = dither != 0u ? prod8 / 255.0
+                                    : floor(prod8 / 8.0) / 31.0;
+        }
     }
     modColor = applyDither(modColor);
     // pre-multiplied alpha output for ONE, ONE_MINUS_SRC_ALPHA blending

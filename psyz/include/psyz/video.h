@@ -73,6 +73,13 @@ typedef enum {
 } PsyzDitherMode;
 
 typedef enum {
+    PSYZ_COLOR_DEPTH_15, /**< shaded colour rounded to the PS1's 15-bit VRAM
+                              (default) */
+    PSYZ_COLOR_DEPTH_24, /**< shaded colour kept at 8 bits per channel in what
+                              is drawn, and no dithering */
+} PsyzColorDepth;
+
+typedef enum {
     PSYZ_ASPECT_DISPLAY, /**< aspect from PS1 H/V display ranges (default) */
     PSYZ_ASPECT_SQUARE,  /**< 1:1 from framebuffer (pixel-perfect) */
 } PsyzAspectMode;
@@ -122,6 +129,26 @@ PsyzDitherMode Psyz_VideoGetDitheringMode(void);
  * @return 0 on success, -1 if invalid mode
  */
 int Psyz_VideoSetDitheringMode(PsyzDitherMode mode);
+
+/**
+ * @brief Get the current colour depth
+ *
+ * @return current colour depth
+ */
+PsyzColorDepth Psyz_VideoGetColorDepth(void);
+
+/**
+ * @brief Set the colour depth of what is drawn (default: 15-bit)
+ *
+ * At 24-bit, shaded and textured primitives keep the 8 bits per channel the
+ * GPU computes instead of being rounded to 15 bits, and nothing dithers.
+ * Reading VRAM back (StoreImage, MoveImage, textures from drawn areas) still
+ * yields 15-bit values, rounded rather than truncated as the PS1 does.
+ *
+ * @param depth Colour depth to set
+ * @return 0 on success, -1 if invalid depth
+ */
+int Psyz_VideoSetColorDepth(PsyzColorDepth depth);
 
 /**
  * @brief Get the current aspect mode
