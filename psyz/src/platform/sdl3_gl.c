@@ -30,15 +30,20 @@
 // selected at runtime based on the active GL profile; the shader bodies are
 // shared and must stay legal in both GLSL 330 core and GLSL ES 3.00 (the
 // latter has no implicit int-to-float conversions)
-static const char shader_prologue_core[] = {"#version 330 core\n"};
+// GLSL ES 3.00 has no noperspective: there a perspective-correct primitive's
+// colour is interpolated with perspective too.
+static const char shader_prologue_core[] = {
+    "#version 330 core\n"
+    "#define NOPERSPECTIVE noperspective\n"};
 static const char shader_prologue_es[] = {
     "#version 300 es\n"
+    "#define NOPERSPECTIVE\n"
     "precision highp float;\n"
     "precision highp int;\n"
     "precision highp sampler2D;\n"};
 
 static const char vertex_shader_body[] = {
-    "layout(location = 0) in vec2 pos;\n"
+    "layout(location = 0) in vec3 pos;\n" // x, y, w
     "layout(location = 1) in vec4 tex;\n"
     "layout(location = 2) in vec4 color;\n"
     "layout(location = 3) in vec4 twin;\n"
@@ -60,13 +65,19 @@ static const char vertex_shader_body[] = {
     "flat out uint dither;\n"       // 1 dithers, 2 keeps 8 bits, 0 neither
     "flat out ivec2 pageBase;\n"    // texture page origin, in VRAM pixels
     "flat out uvec4 texWindow;\n"   // GP0(E2h) as {and.xy, or.zw}
+    // a perspective-correct primitive (TPAGE_PRECISE) interpolates its UV
+    // with w, but its colour across the screen as the console does
+    "NOPERSPECTIVE out vec4 vertexColorAffine;\n"
+    "flat out uint perspective;\n"
     "\n"
     "void main() {\n"
     // a line's quad is already laid out around the pixel centres
     "    vec2 shift = (uint(tex.w) & 0x2000u) != 0u ? vec2(0.0) : samplePoint;\n"
     "    float x = ((pos.x + drawOffset.x + shift.x) / (1024.0 / 2.0)) - 1.0;\n"
     "    float y = ((pos.y + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;\n"
-    "    gl_Position = vec4(x, y, 0.0, 1.0);\n"
+    "    float w = (uint(tex.w) & 0x0800u) != 0u ? pos.z : 1.0;\n"
+    "    perspective = (uint(tex.w) & 0x0800u) != 0u ? 1u : 0u;\n"
+    "    gl_Position = vec4(x * w, y * w, 0.0, w);\n"
     // gouraud colors
     "    vertexColor = color;\n"
     // select the right texture coords based on the tpage
@@ -105,10 +116,13 @@ static const char vertex_shader_body[] = {
     "    pageBase = ivec2(int((tpage % 32u) % 16u) * 64,\n"
     "                     int((tpage % 32u) / 16u) * 256);\n"
     "    texWindow = uvec4(twin);\n"
+    "    vertexColorAffine = vertexColor;\n"
     "}\n"};
 
 static const char fragment_shader_body[] = {
-    "in vec4 vertexColor;\n"
+    "in vec4 vertexColorSmooth;\n"
+    "NOPERSPECTIVE in vec4 vertexColorAffine;\n"
+    "flat in uint perspective;\n"
     "in vec2 rawUV;\n"
     "out vec4 FragColor;\n"
     "flat in uint clut;\n"
@@ -152,6 +166,8 @@ static const char fragment_shader_body[] = {
     "}\n"
     "\n"
     "void main() {\n"
+    "    vec4 vertexColor =\n"
+    "        perspective != 0u ? vertexColorAffine : vertexColorSmooth;\n"
     "    vec4 texColor;\n"
     "    if (textureMode == 0u) {\n" // untextured
     "        texColor = vec4(1, 1, 1, 2);\n"
@@ -990,7 +1006,7 @@ static void Draw_InitBuffer() {
         GL_ELEMENT_ARRAY_BUFFER, sizeof(index_buf), index_buf, GL_DYNAMIC_DRAW);
 
     glVertexAttribPointer(
-        0, 2, GL_SHORT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, x));
+        0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, x));
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof(Vertex),
                           (void*)offsetof(Vertex, u));
@@ -1027,6 +1043,7 @@ int Draw_PushPrim(u_long* packets, int max_len) {
         v->r = v->g = v->b = 0x80;
     }
     v->a = code & SEMITRANSP ? 0x80 : 0xFF;
+    PreciseBegin(packets);
     packets++;
     len--;
     if (isPoly) {
@@ -1076,6 +1093,9 @@ int Draw_PushPrim(u_long* packets, int max_len) {
             }
 
             SET_TC_ALL(vertex_cur, tpage, clut);
+            if (precise_draw_words) {
+                PreciseApply(vertex_cur, nVertices);
+            }
             Draw_EnqueueBuffer(nVertices, nIndices);
         } else {
             // shouldn't happen on a normal PSX application

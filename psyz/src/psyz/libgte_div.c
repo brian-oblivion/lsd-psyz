@@ -21,12 +21,18 @@
 // Corners keep the screen XY the caller gave them; only new vertices are
 // projected. cr[] doubles as the recursion stack: cr[level] holds the corner
 // pointers of the polygon being split and receives its midpoints.
+//
+// With precise geometry (src/precise.h) every screen XY written here carries
+// its precise vertex along: the corners' from the primitive at `s`, which
+// the caller built with the GTE and copied the corners from, the new
+// vertices' from their projection.
 
 #include <psyz.h>
 #include <libgte.h>
 #include <libgpu.h>
 #include <psyz/gte.h>
 #include <string.h>
+#include "../precise.h"
 
 enum {
     DIV_TEXTURED = 1,
@@ -146,6 +152,11 @@ static void div_project3(RVECTOR* a, RVECTOR* b, RVECTOR* c, int store_sz) {
     memcpy(&a->sxy, &sxy[0], sizeof(a->sxy));
     memcpy(&b->sxy, &sxy[1], sizeof(b->sxy));
     memcpy(&c->sxy, &sxy[2], sizeof(c->sxy));
+    if (PRECISE_ON) {
+        Precise_Copy(&a->sxy, &sxy[0]);
+        Precise_Copy(&b->sxy, &sxy[1]);
+        Precise_Copy(&c->sxy, &sxy[2]);
+    }
     if (store_sz) {
         gte_stsz3(&sz[0], &sz[1], &sz[2]);
         a->sz = sz[0];
@@ -159,7 +170,14 @@ static void div_link(u_long* ot, void* p, int len) {
     setlen(p, len);
 }
 
-#define DIV_XY(P, N, V) ((P)->x##N = (V)->sxy.vx, (P)->y##N = (V)->sxy.vy)
+#define DIV_XY(P, N, V)                                                        \
+    do {                                                                       \
+        (P)->x##N = (V)->sxy.vx;                                               \
+        (P)->y##N = (V)->sxy.vy;                                               \
+        if (PRECISE_ON) {                                                      \
+            Precise_Copy(&(P)->x##N, &(V)->sxy);                               \
+        }                                                                      \
+    } while (0)
 #define DIV_UV(P, N, V) ((P)->u##N = (V)->uv[0], (P)->v##N = (V)->uv[1])
 #define DIV_RGB(P, N, V)                                                       \
     ((P)->r##N = (V)->c.r, (P)->g##N = (V)->c.g, (P)->b##N = (V)->c.b)
@@ -441,10 +459,25 @@ static void div_quad(DivState* st, DIVPOLYGON4* d, int level) {
     }
 }
 
+// The corners' precise vertices, from the primitive's XY words: x0 is at
+// the same place in every POLY_*, and each further XY follows the previous
+// by the size of one vertex's words.
+static void div_corners(void* s, RVECTOR* const* r, int n, int kind) {
+    const u_char* xy = (const u_char*)&((POLY_F3*)s)->x0;
+    int stride =
+        4 + ((kind & DIV_TEXTURED) ? 4 : 0) + ((kind & DIV_GOURAUD) ? 4 : 0);
+    for (int i = 0; i < n; i++) {
+        Precise_Copy(&r[i]->sxy, xy + i * stride);
+    }
+}
+
 static u_long* div3(void* s, DIVPOLYGON3* divp, int kind) {
     DivState st;
     if (!div_setup(&st, divp->ndiv, divp->pih, divp->piv, kind, s)) {
         return (u_long*)s;
+    }
+    if (PRECISE_ON) {
+        div_corners(s, &divp->cr[0].r0, 3, kind);
     }
     div_tri(&st, divp, 0);
     return (u_long*)st.s;
@@ -454,6 +487,9 @@ static u_long* div4(void* s, DIVPOLYGON4* divp, int kind) {
     DivState st;
     if (!div_setup(&st, divp->ndiv, divp->pih, divp->piv, kind, s)) {
         return (u_long*)s;
+    }
+    if (PRECISE_ON) {
+        div_corners(s, &divp->cr[0].r0, 4, kind);
     }
     div_quad(&st, divp, 0);
     return (u_long*)st.s;

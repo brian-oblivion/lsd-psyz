@@ -80,6 +80,15 @@ typedef enum {
 } PsyzColorDepth;
 
 typedef enum {
+    PSYZ_GEOMETRY_CONSOLE,     /**< vertices at the GTE's whole pixels, and
+                                    textures mapped affinely (default) */
+    PSYZ_GEOMETRY_PRECISE,     /**< vertices the GTE projected drawn at their
+                                    sub-pixel positions */
+    PSYZ_GEOMETRY_PERSPECTIVE, /**< PRECISE, and their textures mapped with
+                                    perspective */
+} PsyzGeometry;
+
+typedef enum {
     PSYZ_ASPECT_DISPLAY, /**< aspect from PS1 H/V display ranges (default) */
     PSYZ_ASPECT_SQUARE,  /**< 1:1 from framebuffer (pixel-perfect) */
 } PsyzAspectMode;
@@ -149,6 +158,28 @@ PsyzColorDepth Psyz_VideoGetColorDepth(void);
  * @return 0 on success, -1 if invalid depth
  */
 int Psyz_VideoSetColorDepth(PsyzColorDepth depth);
+
+/**
+ * @brief Get the current geometry mode
+ *
+ * @return current geometry mode
+ */
+PsyzGeometry Psyz_VideoGetGeometry(void);
+
+/**
+ * @brief Set how polygons projected by the GTE are drawn (default: CONSOLE)
+ *
+ * PRECISE draws each vertex the GTE projected at its unrounded screen
+ * position, as long as the word the game stored it to reaches the GPU
+ * unchanged; PERSPECTIVE also interpolates their texture coordinates with
+ * the vertex's depth. Everything the game reads back (SXY, SZ, FLAG, the
+ * packets) keeps the console's values, and other primitives are drawn as
+ * the console draws them. Needs a build with PSYZ_PRECISE_GEOMETRY.
+ *
+ * @param geometry Geometry mode to set
+ * @return 0 on success, -1 if invalid or not built in
+ */
+int Psyz_VideoSetGeometry(PsyzGeometry geometry);
 
 /**
  * @brief Get the current aspect mode
