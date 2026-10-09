@@ -292,6 +292,7 @@ static Uint64 finish_time = 0;
 static double drift_compensation = 0.0;
 static PsyzVsyncMode vsync_mode = PSYZ_VSYNC_AUTO;
 static PsyzDitherMode dither_mode = PSYZ_DITHER_AUTO;
+static PsyzColorDepth color_depth = PSYZ_COLOR_DEPTH_15;
 static bool use_driver_vsync = false;
 static bool backend_driver_vsync = false; // what the backend was last set to
 static double last_wait_target_us = 0.0;   // WaitFor's previous target
@@ -680,7 +681,7 @@ void Psyz_VideoPresent(double fps) {
 
 static int s_dither = 0;
 static inline int GetCurrentDither(void) {
-    if (dither_mode == PSYZ_DITHER_OFF) {
+    if (dither_mode == PSYZ_DITHER_OFF || color_depth == PSYZ_COLOR_DEPTH_24) {
         return 0;
     }
     return s_dither;
@@ -709,6 +710,17 @@ int Psyz_VideoSetDitheringMode(PsyzDitherMode mode) {
 }
 
 PsyzDitherMode Psyz_VideoGetDitheringMode(void) { return dither_mode; }
+
+int Psyz_VideoSetColorDepth(PsyzColorDepth depth) {
+    if (depth != PSYZ_COLOR_DEPTH_15 && depth != PSYZ_COLOR_DEPTH_24) {
+        return -1;
+    }
+    // each primitive carries the depth it was queued with
+    color_depth = depth;
+    return 0;
+}
+
+PsyzColorDepth Psyz_VideoGetColorDepth(void) { return color_depth; }
 
 int Psyz_VideoStats(PsyzVideoStats* stats) {
     if (!stats || !is_platform_init_successful) {
@@ -1165,10 +1177,14 @@ typedef struct {
 #define TPAGE_NOTEXTURE 0x8000 // flag untextured poly
 #define TPAGE_DITHER 0x4000    // flag a dithered primitive
 #define TPAGE_LINE 0x2000      // flag a line, drawn as a quad
+#define TPAGE_FULLCOLOR 0x1000 // flag a primitive kept at 8 bits per channel
 
 #define VRGBA(p) (*(unsigned int*)(&((p).r)))
 #define SET_TC(p, tpage, clut)                                                 \
-    (p)->t = (u16)(tpage), (p)->c = (u16)(clut), (p)->twin = cur_twin;
+    (p)->t =                                                                   \
+        (u16)((tpage) |                                                        \
+              (color_depth == PSYZ_COLOR_DEPTH_24 ? TPAGE_FULLCOLOR : 0)),     \
+    (p)->c = (u16)(clut), (p)->twin = cur_twin;
 #define SET_TC_ALL(p, t, c)                                                    \
     SET_TC(p, t, c)                                                            \
     SET_TC(&(p)[1], t, c) SET_TC(&(p)[2], t, c) SET_TC(&(p)[3], t, c)
