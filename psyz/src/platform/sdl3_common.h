@@ -999,6 +999,24 @@ static bool PortHasHostInput(int port) {
     return false;
 }
 
+// Psyz_PadsHold: while pads_held, the host's input reads as nothing pressed;
+// held_buttons are those pressed then (or since), masked until let go.
+static bool pads_held = false;
+static unsigned int held_buttons[2];
+
+void Psyz_PadsHold(int hold) { pads_held = hold != 0; }
+
+// The buttons the host presses on a port, less those Psyz_PadsHold keeps.
+static unsigned int HeldPadRead(int port) {
+    unsigned int pressed = SinglePadRead(port);
+    if (pads_held) {
+        held_buttons[port] = pressed;
+        return 0;
+    }
+    held_buttons[port] &= pressed;
+    return pressed & ~held_buttons[port];
+}
+
 static void BuildPadFrame(int port, PsyzControllerKind kind, char* buf) {
     memset(buf, 0, PSYZ_PAD_BUF_LEN);
     // No physical input for this port -> report as disconnected regardless of
@@ -1013,7 +1031,7 @@ static void BuildPadFrame(int port, PsyzControllerKind kind, char* buf) {
     case PSYZ_CTRL_DIGITAL_PAD:
     case PSYZ_CTRL_ANALOG_PAD:
     case PSYZ_CTRL_ANALOG_STICK: {
-        unsigned int pressed = SinglePadRead(port);
+        unsigned int pressed = HeldPadRead(port);
         if (kind == PSYZ_CTRL_ANALOG_STICK) {
             // The analog stick (SCPH-1110) has no L3/R3; on real hardware
             // those bits always read as released.
@@ -1026,7 +1044,7 @@ static void BuildPadFrame(int port, PsyzControllerKind kind, char* buf) {
             break;
         }
         unsigned char rx = 0x80, ry = 0x80, lx = 0x80, ly = 0x80;
-        if (gamepads[port].dev) {
+        if (gamepads[port].dev && !pads_held) {
             SDL_Gamepad* d = gamepads[port].dev;
             rx = AxisToByte(SDL_GetGamepadAxis(d, SDL_GAMEPAD_AXIS_RIGHTX));
             ry = AxisToByte(SDL_GetGamepadAxis(d, SDL_GAMEPAD_AXIS_RIGHTY));
@@ -1144,9 +1162,10 @@ static void PollEvents(void) {
 #ifndef PLATFORM_IOS
         case SDL_EVENT_KEY_DOWN:
             keyboard_seen = true;
-            // Escape quits unless the game's keyboard map gives it a button.
+            // Escape quits unless the game's keyboard map gives it a button
+            // or an overlay holds the input (Psyz_PadsHold).
             if (event.key.scancode == SDL_SCANCODE_ESCAPE &&
-                !KeyIsBound(SDL_SCANCODE_ESCAPE)) {
+                !KeyIsBound(SDL_SCANCODE_ESCAPE) && !pads_held) {
                 SDL_SetAtomicInt(&quit_requested, 1);
             }
             if (event.key.scancode == SDL_SCANCODE_F6) {
