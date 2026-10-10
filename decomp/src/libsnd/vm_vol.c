@@ -23,7 +23,8 @@ int _SsVmSetVol(
         unsigned level, l, r;
         unsigned p;
 
-        if (v->seq_sep_no != seq_sep_no || v->prog != prog || v->vabId != vabId) {
+        if (v->seq_sep_no != seq_sep_no || v->prog != prog ||
+            v->vabId != vabId) {
             continue;
         }
         level = v->voll1 * (u16)vol / 127;

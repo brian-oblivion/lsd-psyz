@@ -91,7 +91,8 @@ int _SsVmKeyOn(int seq_sep_no, short vabId, short prog, unsigned short note,
         if (score != NULL) {
             // NoteOn scaled the velocity by the channel volume, which is not
             // 0 here, or vol would be 0.
-            _svm_voice[voice].voll1 = vol * 127 / score->vol[score->channel_idx];
+            _svm_voice[voice].voll1 =
+                vol * 127 / score->vol[score->channel_idx];
         }
         _svm_voice[voice].pan = pan;
         _svm_voice[voice].tone = tones[i];

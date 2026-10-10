@@ -73,7 +73,8 @@ static const char vertex_shader_body[] = {
     "\n"
     "void main() {\n"
     // a line's quad is already laid out around the pixel centres
-    "    vec2 shift = (uint(tex.w) & 0x2000u) != 0u ? vec2(0.0) : samplePoint;\n"
+    "    vec2 shift = (uint(tex.w) & 0x2000u) != 0u ? vec2(0.0) : "
+    "samplePoint;\n"
     "    float x = ((pos.x + drawOffset.x + shift.x) / (1024.0 / 2.0)) - 1.0;\n"
     "    float y = ((pos.y + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;\n"
     "    float w = (uint(tex.w) & 0x0800u) != 0u ? pos.z : 1.0;\n"

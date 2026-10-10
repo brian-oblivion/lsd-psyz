@@ -246,14 +246,14 @@ void GsGetTimInfo(u_long* im, GsIMAGE* tim) {
 #define GS_ONE 4096 // 1.0 in 20.12, the scale that leaves a sprite as it is
 
 // GsSPRITE/GsBG/GsBOXF attribute bits
-#define GS_ATTR_DOFF 0x80000000      // not displayed
-#define GS_ATTR_ALON 0x40000000      // semi-transparent
+#define GS_ATTR_DOFF 0x80000000 // not displayed
+#define GS_ATTR_ALON 0x40000000 // semi-transparent
 #define GS_ATTR_ABR(a) (((a) >> 28) & 3)
-#define GS_ATTR_NOROT 0x08000000     // GsSortSprite/GsSortBg: no rotation or scale
-#define GS_ATTR_FLIPX 0x00800000     // GsSortSprite
+#define GS_ATTR_NOROT 0x08000000 // GsSortSprite/GsSortBg: no rotation or scale
+#define GS_ATTR_FLIPX 0x00800000 // GsSortSprite
 #define GS_ATTR_FLIPY 0x00400000
 #define GS_ATTR_TPF(a) (((a) >> 24) & 3) // 4-bit, 8-bit or 15-bit texture
-#define GS_ATTR_NOBRIGHT 0x00000040  // texture drawn as is (r, g, b ignored)
+#define GS_ATTR_NOBRIGHT 0x00000040 // texture drawn as is (r, g, b ignored)
 
 // The OT tag `pri` names, as PSY-Q counts it from the OT's offset.
 static OT_TYPE* gs_ot_tag(GsOT* otp, int pri) {
@@ -307,9 +307,9 @@ void GsSortSprite(GsSPRITE* sp, GsOT* otp, unsigned short pri) {
     if ((attr & GS_ATTR_DOFF) || sp->w == 0 || sp->h == 0) {
         return;
     }
-    const int plain = sp->scalex == GS_ONE && sp->scaley == GS_ONE &&
-                      sp->rotate == 0 &&
-                      !(attr & (GS_ATTR_FLIPX | GS_ATTR_FLIPY));
+    const int plain =
+        sp->scalex == GS_ONE && sp->scaley == GS_ONE && sp->rotate == 0 &&
+        !(attr & (GS_ATTR_FLIPX | GS_ATTR_FLIPY));
     OT_TYPE* tag = gs_ot_tag(otp, pri);
     if ((attr & GS_ATTR_NOROT) || plain) {
         DR_TPAGE* mode = gs_alloc(sizeof(DR_TPAGE));
@@ -411,12 +411,12 @@ static void gs_bg_cell(POLY_FT4* poly, const GsBgCell* c, MATRIX* m) {
         v0 = (c->flag & 1) ? c->v + c->h - 1 : c->v;
         v1 = (c->flag & 1) ? c->v - 1 : c->v + c->h;
         const short x0 = ox + c->px, y0 = oy + c->py;
-        setXY4(poly, x0, y0, x0 + c->w, y0, x0, y0 + c->h, x0 + c->w,
-               y0 + c->h);
+        setXY4(
+            poly, x0, y0, x0 + c->w, y0, x0, y0 + c->h, x0 + c->w, y0 + c->h);
     }
     setUV4(poly, gs_clamp_uv(u0), gs_clamp_uv(v0), gs_clamp_uv(u1),
-           gs_clamp_uv(v0), gs_clamp_uv(u0), gs_clamp_uv(v1),
-           gs_clamp_uv(u1), gs_clamp_uv(v1));
+           gs_clamp_uv(v0), gs_clamp_uv(u0), gs_clamp_uv(v1), gs_clamp_uv(u1),
+           gs_clamp_uv(v1));
     setRGB0(poly, c->r, c->g, c->b);
     poly->code = c->code;
     poly->tpage = c->tpage;
@@ -487,17 +487,16 @@ void GsSortBg(GsBG* bg, GsOT* otp, unsigned short pri) {
             if (w > bg->w - x) {
                 w = bg->w - x;
             }
-            const u_short index =
-                map->index[(my / ch) * map->ncellw + mx / cw];
+            const u_short index = map->index[(my / ch) * map->ncellw + mx / cw];
             if (index != 0xFFFF) {
                 const GsCELL* cell = &map->base[index];
                 c.tpage = gs_tpage(attr, cell->tpage);
                 c.clut = cell->cba;
                 c.flag = cell->flag;
-                c.u = (cell->flag & 2) ? cell->u + cw - offx - w
-                                       : cell->u + offx;
-                c.v = (cell->flag & 1) ? cell->v + ch - offy - h
-                                       : cell->v + offy;
+                c.u =
+                    (cell->flag & 2) ? cell->u + cw - offx - w : cell->u + offx;
+                c.v =
+                    (cell->flag & 1) ? cell->v + ch - offy - h : cell->v + offy;
                 c.w = (short)w;
                 c.h = (short)h;
                 c.px = (short)(x - bg->mx);
@@ -528,10 +527,11 @@ void GsMapModelingData(u_long* base) {
     n = p[1];
     obj = p + 2;
     for (u32 i = 0; i < n; i++, obj += 7) {
-        const u32 entry = i * 7 * sizeof(u32); // the entry's offset in the table
-        obj[0] -= entry; // vertices
-        obj[2] -= entry; // normals
-        obj[4] -= entry; // primitives
+        const u32 entry =
+            i * 7 * sizeof(u32); // the entry's offset in the table
+        obj[0] -= entry;         // vertices
+        obj[2] -= entry;         // normals
+        obj[4] -= entry;         // primitives
     }
 }
 

@@ -2306,9 +2306,8 @@ ZTEST(gte, stdp_stores_ir0) {
 
 // DPCT depth-cues RGB0-RGB2 one after another, each as DPCS would.
 ZTEST(gte, dpct_cues_three_colors_like_dpcs) {
-    unsigned int in[3] = {
-        RGBCD(40, 80, 120, 0x2C), RGBCD(0, 0, 0, 0x2C),
-        RGBCD(255, 255, 255, 0x2C)};
+    unsigned int in[3] = {RGBCD(40, 80, 120, 0x2C), RGBCD(0, 0, 0, 0x2C),
+                          RGBCD(255, 255, 255, 0x2C)};
     unsigned int out[3] = {0, 0, 0}, single = 0;
     int i;
     gte_SetFarColor(200, 100, 50);
@@ -2327,10 +2326,10 @@ ZTEST(gte, dpct_cues_three_colors_like_dpcs) {
 }
 
 // IR1-IR3 set by an identity RTV0, then multiplied by a matrix.
-static void MultiplyIr(SVECTOR* v, MATRIX* light, MATRIX* rot, int useLight,
-                       VECTOR* out) {
-    MATRIX identity = {
-        {{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+static void MultiplyIr(
+    SVECTOR* v, MATRIX* light, MATRIX* rot, int useLight, VECTOR* out) {
+    MATRIX identity = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                       {0, 0, 0}};
     gte_SetRotMatrix(&identity);
     gte_SetTransMatrix(&identity);
     gte_SetLightMatrix(light);
@@ -2346,8 +2345,8 @@ static void MultiplyIr(SVECTOR* v, MATRIX* light, MATRIX* rot, int useLight,
 }
 
 ZTEST(gte, llir_multiplies_ir_by_light_matrix) {
-    MATRIX light = {
-        {{0x1000, 0, 0}, {0, 0x800, 0}, {0, 0, -0x1000}}, {0, 0, 0}};
+    MATRIX light = {{{0x1000, 0, 0}, {0, 0x800, 0}, {0, 0, -0x1000}},
+                    {0, 0, 0}};
     MATRIX rot = {{{0, 0x1000, 0}, {0x1000, 0, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
     SVECTOR v = {100, 200, 300};
     VECTOR out = {0, 0, 0};
@@ -2358,8 +2357,8 @@ ZTEST(gte, llir_multiplies_ir_by_light_matrix) {
 }
 
 ZTEST(gte, rtir_multiplies_ir_by_rotation_matrix) {
-    MATRIX light = {
-        {{0x1000, 0, 0}, {0, 0x800, 0}, {0, 0, -0x1000}}, {0, 0, 0}};
+    MATRIX light = {{{0x1000, 0, 0}, {0, 0x800, 0}, {0, 0, -0x1000}},
+                    {0, 0, 0}};
     MATRIX rot = {{{0, 0x1000, 0}, {0x1000, 0, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
     SVECTOR v = {100, 200, 300};
     VECTOR out = {0, 0, 0};
@@ -2374,10 +2373,10 @@ ZTEST(gte, rtir_multiplies_ir_by_rotation_matrix) {
 // (56.25, 56.25, 62.5), then a quarter of the way to the far colour
 // (255, 0, 0): (105.9, 42.2, 46.9), truncated.
 ZTEST(gte, ncds_lights_and_depth_cues_one_vertex) {
-    MATRIX light = {
-        {{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
-    MATRIX color = {
-        {{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}}, {0, 0, 0}};
+    MATRIX light = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                    {0, 0, 0}};
+    MATRIX color = {{{0x1000, 0, 0}, {0, 0x1000, 0}, {0, 0, 0x1000}},
+                    {0, 0, 0}};
     SVECTOR normal = {0x800, 0x400, 0x200};
     unsigned int in = RGBCD(100, 150, 200, 0x30), out = 0;
     gte_SetLightMatrix(&light);

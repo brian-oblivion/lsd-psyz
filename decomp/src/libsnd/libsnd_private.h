@@ -323,7 +323,13 @@ void _SsSetProgramChange(short a0, short a1, unsigned char a2);
 void _SsGetMetaEvent(short a0, short a1, unsigned char a2);
 void _SsSetPitchBend(short a0, short a1);
 void _SsSetControlChange(short a0, short a1, unsigned char a2);
+#ifdef __psyz
+// Sony's <libsnd.h> declares two arguments, but CC0 is dispatched with its
+// data byte (the VAB id) like every other controller.
 void _SsContBankChange(short a0, short a1, unsigned char a2);
+#else
+void _SsContBankChange(short a0, short a1);
+#endif
 void _SsContDataEntry(short a0, short a1, unsigned char a2);
 void _SsContMainVol(short a0, short a1, unsigned char a2);
 void _SsContPanpot(short a0, short a1, unsigned char a2);

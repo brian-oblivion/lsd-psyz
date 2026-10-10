@@ -119,12 +119,12 @@ ZTEST(gs3d, map_modeling_data_relocates_once) {
     static u32 tmd[2 + 7 * 2];
     u8* table = (u8*)&tmd[2];
     memset(tmd, 0, sizeof(tmd));
-    tmd[1] = 2;                  // two objects
-    tmd[2 + 0] = 0x100;          // vertices
-    tmd[2 + 2] = 0x200;          // normals
-    tmd[2 + 4] = 0x300;          // primitives
-    tmd[2 + 5] = 7;              // primitive count, untouched
-    tmd[2 + 7 + 0] = 0x400;      // the second object's vertices
+    tmd[1] = 2;             // two objects
+    tmd[2 + 0] = 0x100;     // vertices
+    tmd[2 + 2] = 0x200;     // normals
+    tmd[2 + 4] = 0x300;     // primitives
+    tmd[2 + 5] = 7;         // primitive count, untouched
+    tmd[2 + 7 + 0] = 0x400; // the second object's vertices
     GsMapModelingData((u_long*)tmd);
     zexpect_u32_eq(1, tmd[0]);
     zexpect_u32_eq(0x100, tmd[2 + 0]);

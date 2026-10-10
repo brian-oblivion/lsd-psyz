@@ -296,7 +296,7 @@ static PsyzDitherMode dither_mode = PSYZ_DITHER_AUTO;
 static PsyzColorDepth color_depth = PSYZ_COLOR_DEPTH_15;
 static bool use_driver_vsync = false;
 static bool backend_driver_vsync = false; // what the backend was last set to
-static double last_wait_target_us = 0.0;   // WaitFor's previous target
+static double last_wait_target_us = 0.0;  // WaitFor's previous target
 static PsyzVideoStats gpu_stats = {0};
 
 static void PollEvents(void);
@@ -593,7 +593,8 @@ static void WaitFor(double target_us, bool driver_paced, int frames) {
 // already waited for one in the present, so it only needs the timer for the
 // rest.
 static void WaitForNextFrame(int frames) {
-    WaitFor(target_frame_time_us * frames, use_driver_vsync && frames == 1, frames);
+    WaitFor(
+        target_frame_time_us * frames, use_driver_vsync && frames == 1, frames);
 }
 
 int Psyz_VideoVSync(int mode) {
@@ -643,12 +644,11 @@ void Psyz_VideoPresent(double fps) {
     Sdl3Common_ApplyPendingTimingReset();
     // The driver's VSync paces it when the display refreshes at about `fps`
     // (or always, when forced on); otherwise the limiter does.
-    bool driver = vsync_mode == PSYZ_VSYNC_ON ||
-                  (vsync_mode == PSYZ_VSYNC_AUTO && fps > 0.0 &&
-                   RefreshMatches(DisplayRefreshRate() > 0.0
-                                      ? DisplayRefreshRate()
-                                      : 60.0,
-                                  fps));
+    bool driver =
+        vsync_mode == PSYZ_VSYNC_ON ||
+        (vsync_mode == PSYZ_VSYNC_AUTO && fps > 0.0 &&
+         RefreshMatches(
+             DisplayRefreshRate() > 0.0 ? DisplayRefreshRate() : 60.0, fps));
     Psyz_GpuExeque();
     if (backend_driver_vsync != driver) {
         SetBackendVsync(driver);

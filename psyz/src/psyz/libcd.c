@@ -464,7 +464,7 @@ end:
     return written;
 }
 
-#define XA_DECODED_MAX_FRAMES 4032            // 18 blocks * 4 sub * 28 samples
+#define XA_DECODED_MAX_FRAMES 4032 // 18 blocks * 4 sub * 28 samples
 #define XA_ZIGZAG_TAPS 29
 
 // The CD decoder resamples 37800Hz to 44100Hz with a zigzag filter: every six
@@ -852,7 +852,9 @@ static void st_start(int sector, int sectors_per_second) {
 }
 
 static u16 st_u16(const u_char* p) { return (u16)(p[0] | p[1] << 8); }
-static u32 st_u32(const u_char* p) { return st_u16(p) | (u32)st_u16(p + 2) << 16; }
+static u32 st_u32(const u_char* p) {
+    return st_u16(p) | (u32)st_u16(p + 2) << 16;
+}
 
 // Reads the stream's next sector into `raw` (2352 bytes). 0 at the end of
 // the disc or on a read error.
@@ -872,8 +874,9 @@ static int st_read_sector(u_char* raw) {
             return 0;
         }
     }
-    long offset = (long)(st.next_sector - track->abs_sector +
-                         track->start_sector) * SECTOR_SIZE;
+    long offset =
+        (long)(st.next_sector - track->abs_sector + track->start_sector) *
+        SECTOR_SIZE;
     if (fseek(st.file, offset, SEEK_SET) != 0 ||
         fread(raw, 1, SECTOR_SIZE, st.file) != SECTOR_SIZE) {
         return 0;
@@ -888,8 +891,9 @@ static int st_next_frame(void) {
     if (!st.active || st.held) {
         return 0;
     }
-    const int reached = st.start_sector + (int)((long long)(VSync(-1) - st.start_vsync) *
-                                                st.sectors_per_second / 60);
+    const int reached =
+        st.start_sector + (int)((long long)(VSync(-1) - st.start_vsync) *
+                                st.sectors_per_second / 60);
     u_char raw[SECTOR_SIZE];
     while (st.next_sector < reached) {
         if (!st_read_sector(raw)) {

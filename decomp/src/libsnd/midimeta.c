@@ -22,7 +22,8 @@ void _SsGetMetaEvent(short seq_access_num, short seq_num, unsigned char type) {
         score->unk94 = 60000000 / usec;
         ticks = score->resolution * score->unk94 * 10;
         if (ticks < divisor) {
-            score->unk52 = (VBLANK_MINUS * 600) / (score->resolution * score->unk94);
+            score->unk52 =
+                (VBLANK_MINUS * 600) / (score->resolution * score->unk94);
             score->unk54 = score->unk52;
         } else {
             score->unk52 = -1;
