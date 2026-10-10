@@ -1869,23 +1869,32 @@ int Psyz_GteGetScreenXScale(void) { return sx_scale; }
 // vertex instead of DQA and DQB. Not a GTE register either.
 static PsyzGteDepthCueHook depth_cue_hook;
 
-void Psyz_GteSetDepthCueHook(PsyzGteDepthCueHook hook) {
+int Psyz_GteSetDepthCueHook(PsyzGteDepthCueHook hook) {
+    int fade = Precise_SetFade(hook != NULL) == 0 && hook != NULL;
     depth_cue_hook = hook;
+    return fade;
 }
 
 // After RTP_DEPTH: the hook's IR0 for the vertex just projected, whose view
 // coordinates are rt_mac1..3 (sf 0 leaves them 12 bits up), flagged as the
-// GTE flags its own when it is out of 0..0x1000.
-#define RTP_DEPTH_HOOK(sf, f)                                                  \
+// GTE flags its own when it is out of 0..0x1000; and its fade for the
+// precise vertices from `first` to 3 (the ones this command projected).
+#define RTP_DEPTH_HOOK(sf, f, first)                                           \
     do {                                                                       \
         if (depth_cue_hook) {                                                  \
-            int dh_s = (sf) ? 0 : 12;                                          \
-            int dh_dp = depth_cue_hook(                                        \
-                rt_mac1 >> dh_s, rt_mac2 >> dh_s, rt_mac3 >> dh_s, IR0);       \
+            int dh_s = (sf) ? 0 : 12, dh_fade = 0, dh_i;                       \
+            int dh_dp = depth_cue_hook(rt_mac1 >> dh_s, rt_mac2 >> dh_s,       \
+                                       rt_mac3 >> dh_s, IR0, &dh_fade);        \
             (f) &= ~FLAG_IR0_SAT;                                              \
             if (dh_dp < 0 || dh_dp > 0x1000)                                   \
                 (f) |= FLAG_IR0_SAT;                                           \
             IR0 = (short)CLAMP(dh_dp, 0, 0x1000);                              \
+            if (PRECISE_TRACK && dh_fade > 0) {                                \
+                for (dh_i = (first); dh_i < 4; dh_i++) {                       \
+                    prec_sxy[dh_i].fade =                                      \
+                        dh_fade >= 0x1000 ? 1.0f : dh_fade / 4096.0f;          \
+                }                                                              \
+            }                                                                  \
         }                                                                      \
     } while (0)
 
@@ -1960,8 +1969,11 @@ static void PreciseProject(
         (sy) = OFY + MUL_DIV_HI(div, ir2);                                     \
         MAC0_OVF(sy, f);                                                       \
         SAT_FLAG(sy, sy, -0x400, 0x3FF, FLAG_SY2_SAT, f);                      \
-        if (PRECISE_ON) {                                                      \
-            PreciseProject(&(pv), sf, rv_x, rv_y, rv_z, sx, sy);               \
+        if (PRECISE_TRACK) {                                                   \
+            (pv).w = (pv).fade = 0.0f;                                         \
+            if (PRECISE_ON) {                                                  \
+                PreciseProject(&(pv), sf, rv_x, rv_y, rv_z, sx, sy);           \
+            }                                                                  \
         }                                                                      \
     } while (0)
 
@@ -1985,7 +1997,7 @@ static void PreciseProject(
         RTP_VERTEX(sf, lm, V0.vx, V0.vy, V0.vz, FLAG, rt_div, rt_mac1,         \
                    rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3, rt_sx, rt_sy,     \
                    rt_sz, rt_pv);                                              \
-        if (PRECISE_ON) {                                                      \
+        if (PRECISE_TRACK) {                                                   \
             prec_sxy[0] = prec_sxy[1];                                         \
             prec_sxy[1] = prec_sxy[2];                                         \
             prec_sxy[2] = prec_sxy[3] = rt_pv;                                 \
@@ -2004,7 +2016,7 @@ static void PreciseProject(
         SYP = (short)rt_sy;                                                    \
         RTP_STORE_MAC_IR();                                                    \
         RTP_DEPTH(rt_div, FLAG);                                               \
-        RTP_DEPTH_HOOK(sf, FLAG);                                              \
+        RTP_DEPTH_HOOK(sf, FLAG, 2);                                           \
         FLAG_UPDATE_ERROR();                                                   \
         (sxy) = SXY(rt_sx, rt_sy);                                             \
     } while (0)
@@ -2033,7 +2045,7 @@ static void PreciseProject(
         RTP_VERTEX(sf, lm, V2.vx, V2.vy, V2.vz, FLAG, rt_div, rt_mac1,         \
                    rt_mac2, rt_mac3, rt_ir1, rt_ir2, rt_ir3, rt_sx, rt_sy,     \
                    rt_sz, prec_sxy[2]);                                        \
-        if (PRECISE_ON) {                                                      \
+        if (PRECISE_TRACK) {                                                   \
             prec_sxy[3] = prec_sxy[2];                                         \
         }                                                                      \
         SZ3 = (unsigned short)rt_sz;                                           \
@@ -2044,7 +2056,7 @@ static void PreciseProject(
         (sxy2) = SXY(rt_sx, rt_sy);                                            \
         RTP_STORE_MAC_IR();                                                    \
         RTP_DEPTH(rt_div, FLAG);                                               \
-        RTP_DEPTH_HOOK(sf, FLAG);                                              \
+        RTP_DEPTH_HOOK(sf, FLAG, 0);                                           \
         FLAG_UPDATE_ERROR();                                                   \
     } while (0)
 
@@ -2567,7 +2579,7 @@ VECTOR* Square0(VECTOR* v0, VECTOR* v1) {
 // Each SXY store also records its precise vertex at the address it went to.
 #define PRECISE_PUT(addr, i)                                                   \
     do {                                                                       \
-        if (PRECISE_ON) {                                                      \
+        if (PRECISE_TRACK) {                                                   \
             Precise_Put(addr, &prec_sxy[i]);                                   \
         }                                                                      \
     } while (0)
@@ -2786,8 +2798,9 @@ void Psyz_GteStsz4c(unsigned int* out) {
 
 long NormalClip(long sxy0, long sxy1, long sxy2) {
     // TODO can this be simplified with an union?
-    if (PRECISE_ON) {
+    if (PRECISE_TRACK) {
         prec_sxy[0].w = prec_sxy[1].w = prec_sxy[2].w = 0.0f;
+        prec_sxy[0].fade = prec_sxy[1].fade = prec_sxy[2].fade = 0.0f;
     }
     SX0 = (short)sxy0;
     SY0 = (short)(sxy0 >> 16);
@@ -3014,7 +3027,7 @@ long RotAverage4(SVECTOR* v0, SVECTOR* v1, SVECTOR* v2, SVECTOR* v3, int* sxy0,
     *(unsigned int*)sxy1 = s1;
     *(unsigned int*)sxy2 = s2;
     *(unsigned int*)sxy3 = s3;
-    if (PRECISE_ON) {
+    if (PRECISE_TRACK) {
         Precise_Put(sxy0, &prec0);
     }
     PRECISE_PUT(sxy1, 0);
@@ -3075,7 +3088,7 @@ long RotAverageNclip4(
         *(unsigned int*)sxy1 = s1;
         *(unsigned int*)sxy2 = s2;
         *(unsigned int*)sxy3 = s3;
-        if (PRECISE_ON) {
+        if (PRECISE_TRACK) {
             Precise_Put(sxy0, &prec0);
         }
         PRECISE_PUT(sxy1, 0);

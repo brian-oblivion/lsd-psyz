@@ -9,6 +9,7 @@
 
 const PreciseVertex* precise_draw_words = NULL;
 PsyzGeometry precise_mode = PSYZ_GEOMETRY_CONSOLE;
+int precise_fade = 0;
 
 #ifdef PSYZ_PRECISE_GEOMETRY
 
@@ -50,7 +51,7 @@ void Precise_Put(const void* addr, const PreciseVertex* v) {
     if (v) {
         e->v = *v;
     } else {
-        e->v.w = 0.0f;
+        e->v.w = e->v.fade = 0.0f;
     }
 }
 
@@ -59,13 +60,13 @@ int Precise_Get(const void* addr, PreciseVertex* out) {
     if (table) {
         e = slot(addr);
         // a polygon is drawn the frame after the one that built it
-        if (e->addr == (uintptr_t)addr && e->v.w > 0.0f &&
+        if (e->addr == (uintptr_t)addr && (e->v.w > 0.0f || e->v.fade > 0.0f) &&
             e->value == word(addr) && frame - e->frame <= 1) {
             *out = e->v;
             return 1;
         }
     }
-    out->w = 0.0f;
+    out->w = out->fade = 0.0f;
     return 0;
 }
 
@@ -98,11 +99,22 @@ int Psyz_VideoSetGeometry(PsyzGeometry geometry) {
 
 PsyzGeometry Psyz_VideoGetGeometry(void) { return precise_mode; }
 
+int Precise_SetFade(int on) {
+    if (on && !table) {
+        table = calloc(TABLE_MASK + 1, sizeof(Entry));
+        if (!table) {
+            return -1;
+        }
+    }
+    precise_fade = on;
+    return 0;
+}
+
 #else // PSYZ_PRECISE_GEOMETRY
 
 void Precise_Put(const void* addr, const PreciseVertex* v) {}
 int Precise_Get(const void* addr, PreciseVertex* out) {
-    out->w = 0.0f;
+    out->w = out->fade = 0.0f;
     return 0;
 }
 void Precise_Copy(const void* dst, const void* src) {}
@@ -113,5 +125,7 @@ int Psyz_VideoSetGeometry(PsyzGeometry geometry) {
 }
 
 PsyzGeometry Psyz_VideoGetGeometry(void) { return PSYZ_GEOMETRY_CONSOLE; }
+
+int Precise_SetFade(int on) { return on ? -1 : 0; }
 
 #endif // PSYZ_PRECISE_GEOMETRY

@@ -152,7 +152,7 @@ int Psyz_GpuExeque() {
     Draw_ResetBuffer();
     if (queue_len > 0) {
         DispatchPackets(queue_buf, queue_len,
-                        PRECISE_ON && queue_prec_valid ? queue_prec : NULL);
+                        PRECISE_TRACK && queue_prec_valid ? queue_prec : NULL);
         Draw_FlushBuffer();
     }
     Draw_ExequeSync();
@@ -176,7 +176,7 @@ static void GPU_Enqueue(u_long* packets) {
         while (1) {
             if (env->len > 0) {
                 int code = getcode(env) & ~3;
-                bool lookup = PRECISE_ON && code >= 0x20 && code < 0x80;
+                bool lookup = PRECISE_TRACK && code >= 0x20 && code < 0x80;
                 if (lookup) {
                     LookupPrecise((u32*)env->code, (int)env->len, prec);
                 }
@@ -215,7 +215,7 @@ static void GPU_Enqueue(u_long* packets) {
                 for (u_long i = 0; i < env->len; i++) {
                     queue_buf[queue_len + i] = prim_data[i];
                 }
-                if (PRECISE_ON) {
+                if (PRECISE_TRACK) {
                     LookupPrecise(
                         prim_data, (int)env->len, &queue_prec[queue_len]);
                 }
@@ -225,13 +225,14 @@ static void GPU_Enqueue(u_long* packets) {
                 // work
                 memcpy(queue_buf + queue_len, env->code,
                        env->len * sizeof(u_long));
-                if (PRECISE_ON) {
+                if (PRECISE_TRACK) {
                     for (u_long i = 0; i < env->len; i++) {
                         queue_prec[queue_len + i].w = 0.0f;
+                        queue_prec[queue_len + i].fade = 0.0f;
                     }
                 }
             }
-            if (!PRECISE_ON) {
+            if (!PRECISE_TRACK) {
                 queue_prec_valid = false;
             }
         }

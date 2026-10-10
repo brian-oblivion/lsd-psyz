@@ -130,14 +130,21 @@ int Psyz_GteGetScreenXScale(void);
  *
  * @param x, y, z the vertex in view space (MAC1..MAC3 as sf 1 leaves them)
  * @param dp the GTE's depth cue, 0..0x1000 (IR0)
+ * @param fade 0 on entry; set it to draw the vertices the command projected
+ *        (RTPT's three, RTPS's one) that much transparent, up to 0x1000 (not
+ *        at all). The GPU renderers draw a polygon made from them blended
+ *        over what is behind it; the game never sees it.
  * @return the depth cue to leave in IR0; outside 0..0x1000 it is clamped
  *         and flagged as the GTE flags its own
  */
-typedef int (*PsyzGteDepthCueHook)(int x, int y, int z, int dp);
+typedef int (*PsyzGteDepthCueHook)(int x, int y, int z, int dp, int* fade);
 /**
  * @brief Set or clear (NULL, the default) the host's depth cue
+ *
+ * @return 1 when the hook's fade is drawn (a build with
+ *         PSYZ_PRECISE_GEOMETRY), else 0
  */
-void Psyz_GteSetDepthCueHook(PsyzGteDepthCueHook hook);
+int Psyz_GteSetDepthCueHook(PsyzGteDepthCueHook hook);
 void Psyz_GteRtps(void);
 void Psyz_GteRtpt(void);
 void Psyz_GteNclip(void);

@@ -99,16 +99,33 @@ static const u_long* prec_packets;
 static PreciseVertex prec_poly[4];
 
 static inline void PreciseBegin(u_long* packets) {
+    int i;
     prec_packets = packets;
-    prec_poly[0].w = prec_poly[1].w = prec_poly[2].w = prec_poly[3].w = 0.0f;
+    for (i = 0; i < 4; i++) {
+        prec_poly[i].w = prec_poly[i].fade = 0.0f;
+    }
+}
+
+// A vertex's alpha byte says how its polygon blends: 0x80 semi-transparent,
+// 0xFF opaque. A fade (the host's depth cue) keeps the two apart and scales
+// them down: semi-transparent 0x00..0x80, opaque 0xC0..0xFF, for the shader
+// to draw that much of the polygon over what is behind it.
+static inline unsigned char FadeAlpha(unsigned char a, float fade) {
+    float keep = 1.0f - (fade < 1.0f ? fade : 1.0f);
+    return a == 0xFF ? (unsigned char)(0xC0 + (int)(keep * 0x3F + 0.5f))
+                     : (unsigned char)(keep * 0x80 + 0.5f);
 }
 
 // Once the polygon's n vertices are in v: those with a precise vertex are
-// drawn there, and if all have one, with perspective from their depth.
+// drawn there, and if all have one, with perspective from their depth; those
+// with a fade are drawn that much transparent.
 static inline void PreciseApply(Vertex* v, int n) {
     bool all = true;
     int i;
     for (i = 0; i < n; i++) {
+        if (prec_poly[i].fade > 0.0f) {
+            v[i].a = FadeAlpha(v[i].a, prec_poly[i].fade);
+        }
         if (prec_poly[i].w > 0.0f) {
             v[i].x = prec_poly[i].x;
             v[i].y = prec_poly[i].y;

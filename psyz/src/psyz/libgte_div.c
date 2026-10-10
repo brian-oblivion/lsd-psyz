@@ -152,7 +152,7 @@ static void div_project3(RVECTOR* a, RVECTOR* b, RVECTOR* c, int store_sz) {
     memcpy(&a->sxy, &sxy[0], sizeof(a->sxy));
     memcpy(&b->sxy, &sxy[1], sizeof(b->sxy));
     memcpy(&c->sxy, &sxy[2], sizeof(c->sxy));
-    if (PRECISE_ON) {
+    if (PRECISE_TRACK) {
         Precise_Copy(&a->sxy, &sxy[0]);
         Precise_Copy(&b->sxy, &sxy[1]);
         Precise_Copy(&c->sxy, &sxy[2]);
@@ -174,7 +174,7 @@ static void div_link(u_long* ot, void* p, int len) {
     do {                                                                       \
         (P)->x##N = (V)->sxy.vx;                                               \
         (P)->y##N = (V)->sxy.vy;                                               \
-        if (PRECISE_ON) {                                                      \
+        if (PRECISE_TRACK) {                                                   \
             Precise_Copy(&(P)->x##N, &(V)->sxy);                               \
         }                                                                      \
     } while (0)
@@ -476,7 +476,7 @@ static u_long* div3(void* s, DIVPOLYGON3* divp, int kind) {
     if (!div_setup(&st, divp->ndiv, divp->pih, divp->piv, kind, s)) {
         return (u_long*)s;
     }
-    if (PRECISE_ON) {
+    if (PRECISE_TRACK) {
         div_corners(s, &divp->cr[0].r0, 3, kind);
     }
     div_tri(&st, divp, 0);
@@ -488,7 +488,7 @@ static u_long* div4(void* s, DIVPOLYGON4* divp, int kind) {
     if (!div_setup(&st, divp->ndiv, divp->pih, divp->piv, kind, s)) {
         return (u_long*)s;
     }
-    if (PRECISE_ON) {
+    if (PRECISE_TRACK) {
         div_corners(s, &divp->cr[0].r0, 4, kind);
     }
     div_quad(&st, divp, 0);

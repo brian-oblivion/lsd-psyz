@@ -71,6 +71,10 @@ void main() {
     }
     // check for setSemiTrans(p, 1)
     bool isSemiTrans = vertexColor.a < 0.75;
+    // a fade (sdl3_draw.h's FadeAlpha) draws only this much of the polygon
+    float a8 = vertexColor.a * 255.0;
+    float keep = isSemiTrans ? min(a8 / 128.0, 1.0)
+                             : clamp((a8 - 192.0) / 63.0, 0.0, 1.0);
     // when a color has the 0x8000 bit left then it has the semitrans flag on
     bool colorSemiTrans = texColor.a > 0;
     // PS1-accurate texture-color modulation: (tex5 * col8) >> 7, clamp to 31
@@ -95,15 +99,15 @@ void main() {
     if (colorSemiTrans && isSemiTrans) {
         uint abr = (tpage & 0x60u) >> 5u;
         if (abr == 0u) {
-            FragColor = vec4(modColor * 0.5, 0.5); // 50% blend
+            FragColor = vec4(modColor * 0.5, 0.5) * keep; // 50% blend
         } else if (abr == 1u) {
-            FragColor = vec4(modColor, 0.0); // additive
+            FragColor = vec4(modColor * keep, 0.0); // additive
         } else if (abr == 2u) {
-            FragColor = vec4(modColor, 0.0); // subtractive
+            FragColor = vec4(modColor * keep, 0.0); // subtractive
         } else {                                  // abr == 3u
-            FragColor = vec4(modColor * 0.25, 0.0); // B + F/4
+            FragColor = vec4(modColor * 0.25 * keep, 0.0); // B + F/4
         }
     } else {
-        FragColor = vec4(modColor, 1.0); // full opacity
+        FragColor = vec4(modColor, 1.0) * keep; // full opacity
     }
 }

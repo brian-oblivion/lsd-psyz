@@ -19,23 +19,36 @@ typedef struct {
     float x, y; // screen position, in the 16-bit SXY's units
     float w;    // view-space depth (SZ's units), 0 when there is no precise
                 // vertex
+    float fade; // how transparent the host's depth cue wants the vertex
+                // drawn, 0 (as the console) to 1 (Psyz_GteSetDepthCueHook)
 } PreciseVertex;
 
 // Psyz_VideoSetGeometry's mode; always the console's in a build without it.
 extern PsyzGeometry precise_mode;
+// A depth-cue hook is set: the vertices are carried for their fade, whatever
+// the geometry.
+extern int precise_fade;
 
 #ifdef PSYZ_PRECISE_GEOMETRY
 #define PRECISE_ON (precise_mode != PSYZ_GEOMETRY_CONSOLE)
+// The vertices are carried to the GPU: for their positions, or their fade.
+#define PRECISE_TRACK (PRECISE_ON || precise_fade)
 #else
 #define PRECISE_ON 0
+#define PRECISE_TRACK 0
 #endif
+
+// Carries the vertices for their fade (on) or not; -1 when it can't (a
+// build without PSYZ_PRECISE_GEOMETRY, or no memory for the table).
+int Precise_SetFade(int on);
 
 // The word at addr has just been stored from v (NULL: from no precise
 // vertex, which forgets what an earlier store left there).
 void Precise_Put(const void* addr, const PreciseVertex* v);
 
 // The precise vertex stored at addr, if the word there still holds what was
-// stored; else out->w = 0 and 0 is returned.
+// stored and it has a position or a fade; else out->w = out->fade = 0 and 0
+// is returned.
 int Precise_Get(const void* addr, PreciseVertex* out);
 
 // The word at src was copied to dst: carry its precise vertex along.

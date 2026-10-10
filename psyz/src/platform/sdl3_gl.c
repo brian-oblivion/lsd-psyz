@@ -195,6 +195,10 @@ static const char fragment_shader_body[] = {
     "    }\n"
     // check for setSemiTrans(p, 1)
     "    bool isSemiTrans = vertexColor.a < 0.75;"
+    // a fade (sdl3_draw.h's FadeAlpha) draws only this much of the polygon
+    "    float a8 = vertexColor.a * 255.0;\n"
+    "    float keep = isSemiTrans ? min(a8 / 128.0, 1.0)\n"
+    "                             : clamp((a8 - 192.0) / 63.0, 0.0, 1.0);\n"
     // when a color has the 0x8000 bit left then it has the semitrans flag on
     "    bool colorSemiTrans = texColor.a > 0.0;"
     // PS1-accurate texture-color modulation: (tex5 * col8) >> 7
@@ -220,16 +224,16 @@ static const char fragment_shader_body[] = {
     "    if (colorSemiTrans && isSemiTrans) {\n"
     "        uint abr = (tpage & 0x60u) >> 5u;\n"
     "        if (abr == 0u) {\n"
-    "            FragColor = vec4(modColor * 0.5, 0.5);\n" // 50% blend
+    "            FragColor = vec4(modColor * 0.5, 0.5) * keep;\n" // 50% blend
     "        } else if (abr == 1u) {\n"
-    "            FragColor = vec4(modColor, 0.0);\n" // additive
+    "            FragColor = vec4(modColor * keep, 0.0);\n" // additive
     "        } else if (abr == 2u) {\n"
-    "            FragColor = vec4(modColor, 0.0);\n"        // subtractive
+    "            FragColor = vec4(modColor * keep, 0.0);\n" // subtractive
     "        } else {\n"                                    // abr == 3u
-    "            FragColor = vec4(modColor * 0.25, 0.0);\n" // B + F/4
+    "            FragColor = vec4(modColor * 0.25 * keep, 0.0);\n" // B + F/4
     "        }\n"
     "    } else {\n"
-    "        FragColor = vec4(modColor, 1.0);\n" // full opacity
+    "        FragColor = vec4(modColor, 1.0) * keep;\n" // full opacity
     "    }\n"
     "}\n"};
 
