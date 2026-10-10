@@ -53,7 +53,7 @@ static const char vertex_shader_body[] = {
     // half a render pixel in VRAM units, so the pixel centres the rasteriser
     // tests land on the PS1's integer pixel positions
     "uniform vec2 samplePoint;\n"
-    "out vec4 vertexColor;\n"
+    "out vec4 vertexColorSmooth;\n"
     "out vec2 rawUV;\n"
     "flat out uint tpage;\n"
     "flat out uint clut;\n"
@@ -81,7 +81,7 @@ static const char vertex_shader_body[] = {
     "    perspective = (uint(tex.w) & 0x0800u) != 0u ? 1u : 0u;\n"
     "    gl_Position = vec4(x * w, y * w, 0.0, w);\n"
     // gouraud colors
-    "    vertexColor = color;\n"
+    "    vec4 vertexColor = color;\n"
     // select the right texture coords based on the tpage
     "    clut = uint(tex.z);\n"
     "    uint texWord = uint(tex.w);\n"
@@ -118,6 +118,7 @@ static const char vertex_shader_body[] = {
     "    pageBase = ivec2(int((tpage % 32u) % 16u) * 64,\n"
     "                     int((tpage % 32u) / 16u) * 256);\n"
     "    texWindow = uvec4(twin);\n"
+    "    vertexColorSmooth = vertexColor;\n"
     "    vertexColorAffine = vertexColor;\n"
     "}\n"};
 
@@ -313,7 +314,7 @@ static GLuint Init_SetupShader() {
     glGetProgramiv(program, GL_LINK_STATUS, &success);
     if (!success) {
         char compilerLog[512];
-        glGetShaderInfoLog(program, 512, NULL, compilerLog);
+        glGetProgramInfoLog(program, 512, NULL, compilerLog);
         ERRORF("shader linking failed:\n%s", compilerLog);
     }
     glDeleteShader(vertShader);

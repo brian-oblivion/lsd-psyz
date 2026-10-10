@@ -147,7 +147,7 @@ void* DMACallback(int dma, void (*func)());
  * @param func Pointer to callback function (NULL to unregister)
  * @return Previous callback function pointer
  */
-void* InterruptCallback(int irq, void (*func)());
+void* InterruptCallback(int irq, void (*func)(void));
 
 /**
  * @brief Initialize all callbacks.
