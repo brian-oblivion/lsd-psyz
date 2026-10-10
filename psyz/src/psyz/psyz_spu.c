@@ -1,6 +1,7 @@
 #include <psyz.h>
 #include <psyz/log.h>
 #include <assert.h>
+#include <math.h>
 #include <string.h>
 #include "spu_voice.h"
 
@@ -39,6 +40,112 @@ static struct {
 
     u8 initialized;
 } spu;
+
+// The host's controls (Psyz_SpuSetGroupGain and the like), kept apart from
+// the SPU's state so that a reset doesn't undo them. Gains are Q15, 0x8000
+// being 1.0; each ramps toward its target by GAIN_STEP a sample.
+#define GAIN_UNITY 0x8000
+#define GAIN_STEP 64 // 1.0 in 512 samples, about 12 ms
+enum { GAIN_CD = PSYZ_SPU_GROUPS, GAIN_MASTER, N_GAINS };
+static struct {
+    volatile int target[N_GAINS];
+    int gain[N_GAINS];
+    volatile u8 next_group[PSYZ_SPU_NUM_VOICES]; // taken at key-on
+    u8 group[PSYZ_SPU_NUM_VOICES];
+    volatile int interp; // PsyzSpuInterp
+} mix = {
+    {GAIN_UNITY, GAIN_UNITY, GAIN_UNITY, GAIN_UNITY},
+    {GAIN_UNITY, GAIN_UNITY, GAIN_UNITY, GAIN_UNITY},
+};
+
+short spu_cubic_tbl[256][4];
+short spu_sinc_tbl[256][8];
+
+// Rounds a phase's taps to Q14 so that they sum to exactly 16384, the
+// rounding error going to the largest tap.
+static void spu_interp_store(short* out, const double* w, int n) {
+    double sum = 0;
+    int total = 0, big = 0;
+    for (int i = 0; i < n; i++)
+        sum += w[i];
+    for (int i = 0; i < n; i++) {
+        out[i] = (short)lrint(w[i] / sum * 16384.0);
+        total += out[i];
+        if (fabs(w[i]) > fabs(w[big]))
+            big = i;
+    }
+    out[big] += 16384 - total;
+}
+
+void spu_interp_init(void) {
+    for (int p = 0; p < 256; p++) {
+        double t = p / 256.0, w[8];
+        // Catmull-Rom between the 2nd and 3rd of 4 samples
+        w[0] = 0.5 * (-t + 2 * t * t - t * t * t);
+        w[1] = 0.5 * (2 - 5 * t * t + 3 * t * t * t);
+        w[2] = 0.5 * (t + 4 * t * t - 3 * t * t * t);
+        w[3] = 0.5 * (-t * t + t * t * t);
+        spu_interp_store(spu_cubic_tbl[p], w, 4);
+        // Lanczos (a = 4) between the 4th and 5th of 8 samples
+        for (int i = 0; i < 8; i++) {
+            double x = (i - 3) - t;
+            if (fabs(x) < 1e-9) {
+                w[i] = 1;
+            } else {
+                double px = 3.14159265358979323846 * x;
+                w[i] = 4 * sin(px) * sin(px / 4) / (px * px);
+            }
+        }
+        spu_interp_store(spu_sinc_tbl[p], w, 8);
+    }
+}
+
+static int gain_q15(float gain) {
+    if (!(gain > 0))
+        return 0;
+    if (gain >= 1)
+        return GAIN_UNITY;
+    return (int)(gain * GAIN_UNITY + 0.5f);
+}
+
+void Psyz_SpuSetVoiceGroup(int voice, int group) {
+    if (voice >= 0 && voice < PSYZ_SPU_NUM_VOICES && group >= 0 &&
+        group < PSYZ_SPU_GROUPS) {
+        mix.next_group[voice] = (u8)group;
+    }
+}
+
+void Psyz_SpuSetGroupGain(int group, float gain) {
+    if (group >= 0 && group < PSYZ_SPU_GROUPS)
+        mix.target[group] = gain_q15(gain);
+}
+
+void Psyz_SpuSetCdGain(float gain) { mix.target[GAIN_CD] = gain_q15(gain); }
+
+void Psyz_SpuSetMasterGain(float gain) {
+    mix.target[GAIN_MASTER] = gain_q15(gain);
+}
+
+void Psyz_SpuSetInterpolation(PsyzSpuInterp interp) {
+    static int tables_made;
+    if (interp != PSYZ_SPU_INTERP_GAUSS && !tables_made) {
+        spu_interp_init();
+        tables_made = 1;
+    }
+    mix.interp = interp;
+}
+
+// Moves each gain a step toward its target, once a sample.
+static void gains_step(void) {
+    for (int i = 0; i < N_GAINS; i++) {
+        int target = mix.target[i];
+        int g = mix.gain[i];
+        if (g < target)
+            mix.gain[i] = g + GAIN_STEP < target ? g + GAIN_STEP : target;
+        else if (g > target)
+            mix.gain[i] = g - GAIN_STEP > target ? g - GAIN_STEP : target;
+    }
+}
 
 u8* Psyz_SpuGetRam(void) { return spu.ram; }
 
@@ -119,6 +226,7 @@ void Psyz_SpuMemWrite(unsigned int offset, const void* src, unsigned int size) {
 
 static void spu_key_on_voice(int v) {
     spu_voice_key_on(&spu.voice[v], &_spu_RXX->rxx.voice[v]);
+    mix.group[v] = mix.next_group[v];
 }
 
 void Psyz_SpuWrite(unsigned int reg_offset, unsigned short value) {
@@ -334,23 +442,32 @@ static void spu_tick(short* out) {
         spu.cd_ring_count--;
     }
 
+    gains_step();
+    int interp = mix.interp;
+
     // decode+resample, scale volume by ADSR envelope, then mix voices
     short v1_sample = 0, v3_sample = 0;
     for (int v = 0; v < PSYZ_SPU_NUM_VOICES; v++) {
         if (!spu.voice[v].active)
             continue;
-        short s = spu_voice_step(&spu.voice[v], rxx->voice[v].pitch, spu.ram);
+        // the capture buffers keep the console's sample, whatever is heard
+        short console_s = 0;
+        short s =
+            spu_voice_step(&spu.voice[v], rxx->voice[v].pitch, spu.ram, interp,
+                           (v == 1 || v == 3) ? &console_s : NULL);
         spu_voice_envelope_step(&spu.voice[v]);
         if (spu.voice[v].env_state == ADSR_OFF) {
             s = 0;
+            console_s = 0;
         }
         rxx->voice[v].volumex = (unsigned short)spu.voice[v].env_vol;
         s = (short)(((int)s * spu.voice[v].env_vol) >> 15);
         if (v == 1) {
-            v1_sample = s;
+            v1_sample = (short)(((int)console_s * spu.voice[v].env_vol) >> 15);
         } else if (v == 3) {
-            v3_sample = s;
+            v3_sample = (short)(((int)console_s * spu.voice[v].env_vol) >> 15);
         }
+        s = (short)((s * mix.gain[mix.group[v]]) >> 15);
         {
             int voice_left = (s * voice_vol(rxx->voice[v].volume.left)) >> 15;
             int voice_right = (s * voice_vol(rxx->voice[v].volume.right)) >> 15;
@@ -377,12 +494,15 @@ static void spu_tick(short* out) {
 
     // Mix CD audio per SPUCNT and cd_vol registers.
     if (spucnt & SPU_CTRL_MASK_CD_AUDIO_ENABLE) {
-        left_sum += (cd_left * rxx->cd_vol.left) >> 15;
-        right_sum += (cd_right * rxx->cd_vol.right) >> 15;
+        int g = mix.gain[GAIN_CD];
+        left_sum += (((cd_left * g) >> 15) * rxx->cd_vol.left) >> 15;
+        right_sum += (((cd_right * g) >> 15) * rxx->cd_vol.right) >> 15;
     }
 
     out[0] = clamp16((left_sum * clamp15(rxx->main_vol.left)) >> 14);
     out[1] = clamp16((right_sum * clamp15(rxx->main_vol.right)) >> 14);
+    out[0] = (short)((out[0] * mix.gain[GAIN_MASTER]) >> 15);
+    out[1] = (short)((out[1] * mix.gain[GAIN_MASTER]) >> 15);
 
     // Capture buffers back to SPU RAM, as per real hardware
     write_capture(0, (short)cd_left);

@@ -757,7 +757,8 @@ static short tracked_step(int v) {
     VoiceState* vs = &spu.voice[v];
     if (!vs->active)
         return 0;
-    short s = spu_voice_step(vs, _spu_RXX->rxx.voice[v].pitch, ram_storage);
+    short s = spu_voice_step(vs, _spu_RXX->rxx.voice[v].pitch, ram_storage,
+                             PSYZ_SPU_INTERP_GAUSS, NULL);
     spu_voice_envelope_step(vs);
     if (vs->env_state == ADSR_OFF)
         return 0;
@@ -844,3 +845,17 @@ void Psyz_SpuPullSamples(short* out, int num_frames) {
         }
     }
 }
+
+// The host's volume and interpolation controls are not applied here: SAS
+// mixes and interpolates the voices on the Media Engine.
+void Psyz_SpuSetVoiceGroup(int voice, int group) {
+    (void)voice;
+    (void)group;
+}
+void Psyz_SpuSetGroupGain(int group, float gain) {
+    (void)group;
+    (void)gain;
+}
+void Psyz_SpuSetCdGain(float gain) { (void)gain; }
+void Psyz_SpuSetMasterGain(float gain) { (void)gain; }
+void Psyz_SpuSetInterpolation(PsyzSpuInterp interp) { (void)interp; }

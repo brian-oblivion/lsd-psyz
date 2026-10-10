@@ -139,6 +139,15 @@ void _SsVmFlush(void) {
     _svm_okon1 = 0;
     _svm_okon2 = 0;
 #ifdef __psyz
+    // The host can set each group's volume: a sound effect's voice (keyed by
+    // SsUtKeyOn and the like) apart from a sequence's.
+    for (i = 0; i < NUM_VOICES; i++) {
+        if (((i < 16 ? temp_a1 >> i : temp_a2 >> (i - 16)) & 1)) {
+            Psyz_SpuSetVoiceGroup(
+                i, _svm_voice[i].seq_sep_no == 0x21 ? PSYZ_SPU_GROUP_SE
+                                                    : PSYZ_SPU_GROUP_SEQ);
+        }
+    }
     SPUW(key_off[0], temp_v1);
     SPUW(key_off[1], temp_a0);
     SPUW(key_on[0], temp_a1);

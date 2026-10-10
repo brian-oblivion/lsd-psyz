@@ -85,6 +85,8 @@ typedef struct {
     unsigned sinc;  // pitch_reg << 4 is the per-output-tick increment
     short gwin[4];  // GAUSS interpolation window
     u8 gpos;        // index to next decoded sample in gwin
+    short hwin[8];  // the last 8 decoded samples, for the host's interpolators
+    u8 hpos;        // index to next decoded sample in hwin
     u8 active;
     u8 needs_decode;
     int env_vol;          // mirrors SPU_VOICE_REG::volumex
@@ -142,6 +144,8 @@ static inline int spu_voice_decode_one_sample(VoiceState* vs, const u8* ram) {
                 vs->env_state = ADSR_OFF;
                 vs->gwin[vs->gpos] = 0;
                 vs->gpos = (vs->gpos + 1) & 3;
+                vs->hwin[vs->hpos] = 0;
+                vs->hpos = (vs->hpos + 1) & 7;
                 return 0;
             }
             vs->cur_addr = vs->repeat_addr;
@@ -169,13 +173,54 @@ static inline int spu_voice_decode_one_sample(VoiceState* vs, const u8* ram) {
     short s = vs->samples[vs->sample_idx++];
     vs->gwin[vs->gpos] = s;
     vs->gpos = (vs->gpos + 1) & 3;
+    vs->hwin[vs->hpos] = s;
+    vs->hpos = (vs->hpos + 1) & 7;
     return 1;
 }
 
+// The host's interpolators: 256 phases of taps in Q14, each phase summing to
+// 16384 (a tap of 1.0 wouldn't fit Q15). Filled by spu_interp_init.
+extern short spu_cubic_tbl[256][4];
+extern short spu_sinc_tbl[256][8];
+void spu_interp_init(void);
+
+static inline short spu_voice_gauss(const VoiceState* vs) {
+    int vl = (vs->spos >> 6) & ~3;
+    int g0 = vs->gwin[vs->gpos & 3];
+    int g1 = vs->gwin[(vs->gpos + 1) & 3];
+    int g2 = vs->gwin[(vs->gpos + 2) & 3];
+    int g3 = vs->gwin[(vs->gpos + 3) & 3];
+    int acc = (spu_gauss_tbl[vl + 0] * g0) & ~2047;
+    acc += (spu_gauss_tbl[vl + 1] * g1) & ~2047;
+    acc += (spu_gauss_tbl[vl + 2] * g2) & ~2047;
+    acc += (spu_gauss_tbl[vl + 3] * g3) & ~2047;
+    // each tap keeps 11 fractional bits and the taps sum to 0x800: unity gain
+    return clamp16(acc >> 11);
+}
+
+// Between the same two samples as the gaussian (the 2nd and 3rd oldest of 4).
+static inline short spu_voice_cubic(const VoiceState* vs) {
+    const short* c = spu_cubic_tbl[(vs->spos >> 8) & 0xFF];
+    int acc = 0;
+    for (int i = 0; i < 4; i++)
+        acc += c[i] * vs->hwin[(vs->hpos + 4 + i) & 7];
+    return clamp16(acc >> 14);
+}
+
+// Between the 4th and 5th oldest of 8: two samples later than the gaussian.
+static inline short spu_voice_sinc(const VoiceState* vs) {
+    const short* c = spu_sinc_tbl[(vs->spos >> 8) & 0xFF];
+    int acc = 0;
+    for (int i = 0; i < 8; i++)
+        acc += c[i] * vs->hwin[(vs->hpos + i) & 7];
+    return clamp16(acc >> 14);
+}
+
 // Advance the voice by one output-rate tick (44.1 kHz) and return its
-// pitch-resampled, gauss-interpolated short sample.
-static inline short spu_voice_step(
-    VoiceState* vs, unsigned pitch_reg, const u8* ram) {
+// pitch-resampled sample: through the gaussian, or the interpolator `interp`
+// (a PsyzSpuInterp) with the gaussian's sample in *gauss if not NULL.
+static inline short spu_voice_step(VoiceState* vs, unsigned pitch_reg,
+                                   const u8* ram, int interp, short* gauss) {
     // for pitch changes during voice on, enable vibrato or bends
     unsigned pitch = pitch_reg & 0x3FFF;
     vs->sinc = pitch ? pitch << 4 : 1;
@@ -190,19 +235,19 @@ static inline short spu_voice_step(
         vs->spos -= 0x10000;
     }
 
-    // GAUSS interpolation
-    int vl = (vs->spos >> 6) & ~3;
-    int g0 = vs->gwin[vs->gpos & 3];
-    int g1 = vs->gwin[(vs->gpos + 1) & 3];
-    int g2 = vs->gwin[(vs->gpos + 2) & 3];
-    int g3 = vs->gwin[(vs->gpos + 3) & 3];
-    int acc = (spu_gauss_tbl[vl + 0] * g0) & ~2047;
-    acc += (spu_gauss_tbl[vl + 1] * g1) & ~2047;
-    acc += (spu_gauss_tbl[vl + 2] * g2) & ~2047;
-    acc += (spu_gauss_tbl[vl + 3] * g3) & ~2047;
+    short s;
+    if (interp == PSYZ_SPU_INTERP_GAUSS) {
+        s = spu_voice_gauss(vs);
+        if (gauss)
+            *gauss = s;
+    } else {
+        s = interp == PSYZ_SPU_INTERP_CUBIC ? spu_voice_cubic(vs)
+                                            : spu_voice_sinc(vs);
+        if (gauss)
+            *gauss = spu_voice_gauss(vs);
+    }
     vs->spos += vs->sinc;
-    // each tap keeps 11 fractional bits and the taps sum to 0x800: unity gain
-    return clamp16(acc >> 11);
+    return s;
 }
 
 static inline unsigned adsr_denominator(int rate) {

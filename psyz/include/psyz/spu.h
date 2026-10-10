@@ -139,6 +139,63 @@ unsigned char* Psyz_SpuGetRam(void);
  */
 void Psyz_SpuPullSamples(short* out, int num_frames);
 
+/**
+ * Voice groups, for the host's volume controls. libsnd puts a voice keyed by
+ * a sequence in PSYZ_SPU_GROUP_SEQ and one keyed as a sound effect (SsUtKeyOn
+ * and the like) in PSYZ_SPU_GROUP_SE; a voice nothing has put in a group is
+ * in PSYZ_SPU_GROUP_SEQ.
+ */
+#define PSYZ_SPU_GROUP_SEQ 0
+#define PSYZ_SPU_GROUP_SE 1
+#define PSYZ_SPU_GROUPS 2
+
+/**
+ * @brief Put a voice in a group from its next key-on
+ *
+ * @param voice Voice, 0 to PSYZ_SPU_NUM_VOICES - 1
+ * @param group PSYZ_SPU_GROUP_*
+ */
+void Psyz_SpuSetVoiceGroup(int voice, int group);
+
+/**
+ * @brief Scale what a group's voices are heard at, reverb included
+ *
+ * The gains apply to what is heard only: the voices' registers, envelopes
+ * (ENVX) and the capture buffers stay as the console has them. A change
+ * ramps over about 12 ms. 1.0, the default, leaves the mix as it is.
+ *
+ * @param group PSYZ_SPU_GROUP_*
+ * @param gain 0.0 (silent) to 1.0
+ */
+void Psyz_SpuSetGroupGain(int group, float gain);
+
+/**
+ * @brief Scale CD audio and XA, as Psyz_SpuSetGroupGain does voices
+ */
+void Psyz_SpuSetCdGain(float gain);
+
+/**
+ * @brief Scale the whole mix, after the main volume and its clipping
+ */
+void Psyz_SpuSetMasterGain(float gain);
+
+/**
+ * How a voice is resampled to its pitch.
+ */
+typedef enum {
+    PSYZ_SPU_INTERP_GAUSS, /**< the console's 4-tap gaussian (the default) */
+    PSYZ_SPU_INTERP_CUBIC, /**< 4-point cubic (Catmull-Rom): brighter */
+    PSYZ_SPU_INTERP_SINC,  /**< 8-tap windowed sinc: flattest */
+} PsyzSpuInterp;
+
+/**
+ * @brief Choose how voices are resampled
+ *
+ * Changes what is heard only: the capture buffers of voices 1 and 3 keep the
+ * console's gaussian.
+ */
+void Psyz_SpuSetInterpolation(PsyzSpuInterp interp);
+
 #ifdef __cplusplus
 }
 #endif
