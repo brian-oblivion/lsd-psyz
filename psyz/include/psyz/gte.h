@@ -120,6 +120,24 @@ void Psyz_GteLcir(void);
  */
 void Psyz_GteSetScreenXScale(int scale);
 int Psyz_GteGetScreenXScale(void);
+/**
+ * @brief The depth cue RTPS and RTPT give, from the host
+ *
+ * Not part of the PS1's GTE: an enhancement, for a fog of the host's own.
+ * Called by RTPS and RTPT (and the libgte calls built on them) for the
+ * vertex whose depth cue they leave in IR0 (RTPT's last), after the GTE's
+ * own from DQA and DQB.
+ *
+ * @param x, y, z the vertex in view space (MAC1..MAC3 as sf 1 leaves them)
+ * @param dp the GTE's depth cue, 0..0x1000 (IR0)
+ * @return the depth cue to leave in IR0; outside 0..0x1000 it is clamped
+ *         and flagged as the GTE flags its own
+ */
+typedef int (*PsyzGteDepthCueHook)(int x, int y, int z, int dp);
+/**
+ * @brief Set or clear (NULL, the default) the host's depth cue
+ */
+void Psyz_GteSetDepthCueHook(PsyzGteDepthCueHook hook);
 void Psyz_GteRtps(void);
 void Psyz_GteRtpt(void);
 void Psyz_GteNclip(void);

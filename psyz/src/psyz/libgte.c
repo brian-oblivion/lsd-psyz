@@ -1865,6 +1865,30 @@ void Psyz_GteSetScreenXScale(int scale) {
 
 int Psyz_GteGetScreenXScale(void) { return sx_scale; }
 
+// The host's depth cue (Psyz_GteSetDepthCueHook): IR0 from the projected
+// vertex instead of DQA and DQB. Not a GTE register either.
+static PsyzGteDepthCueHook depth_cue_hook;
+
+void Psyz_GteSetDepthCueHook(PsyzGteDepthCueHook hook) {
+    depth_cue_hook = hook;
+}
+
+// After RTP_DEPTH: the hook's IR0 for the vertex just projected, whose view
+// coordinates are rt_mac1..3 (sf 0 leaves them 12 bits up), flagged as the
+// GTE flags its own when it is out of 0..0x1000.
+#define RTP_DEPTH_HOOK(sf, f)                                                  \
+    do {                                                                       \
+        if (depth_cue_hook) {                                                  \
+            int dh_s = (sf) ? 0 : 12;                                          \
+            int dh_dp = depth_cue_hook(                                        \
+                rt_mac1 >> dh_s, rt_mac2 >> dh_s, rt_mac3 >> dh_s, IR0);       \
+            (f) &= ~FLAG_IR0_SAT;                                              \
+            if (dh_dp < 0 || dh_dp > 0x1000)                                   \
+                (f) |= FLAG_IR0_SAT;                                           \
+            IR0 = (short)CLAMP(dh_dp, 0, 0x1000);                              \
+        }                                                                      \
+    } while (0)
+
 // Precise geometry (src/precise.h): the precise vertex behind each entry of
 // the screen-XY FIFO, SXY0, SXY1, SXY2 and SXYP.
 static PreciseVertex prec_sxy[4];
@@ -1980,6 +2004,7 @@ static void PreciseProject(
         SYP = (short)rt_sy;                                                    \
         RTP_STORE_MAC_IR();                                                    \
         RTP_DEPTH(rt_div, FLAG);                                               \
+        RTP_DEPTH_HOOK(sf, FLAG);                                              \
         FLAG_UPDATE_ERROR();                                                   \
         (sxy) = SXY(rt_sx, rt_sy);                                             \
     } while (0)
@@ -2019,6 +2044,7 @@ static void PreciseProject(
         (sxy2) = SXY(rt_sx, rt_sy);                                            \
         RTP_STORE_MAC_IR();                                                    \
         RTP_DEPTH(rt_div, FLAG);                                               \
+        RTP_DEPTH_HOOK(sf, FLAG);                                              \
         FLAG_UPDATE_ERROR();                                                   \
     } while (0)
 
