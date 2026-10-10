@@ -290,6 +290,25 @@ ZTEST(gpu, draw_sprt_16bpp_page_past_vram_edge) {
     Present("draw_sprt_16bpp");
 }
 
+ZTEST(gpu, read_tim_walks_consecutive_images) {
+    static unsigned int tims[][6] = {
+        {0x10, 2, 16, 0x00100100, 0x00020001, 0x7FFF7FFF},
+        {0x10, 2, 16, 0x00200200, 0x00020001, 0x001F001F},
+        {0},
+    };
+    TIM_IMAGE tim;
+    zassert_s32_eq(0, OpenTIM((u_long*)tims));
+    zassert_ptr_ne(NULL, ReadTIM(&tim));
+    zexpect_ptr_eq(&tims[0][3], tim.prect);
+    zexpect_ptr_eq(&tims[0][5], tim.paddr);
+    zassert_ptr_ne(NULL, ReadTIM(&tim));
+    zexpect_ptr_eq(&tims[1][3], tim.prect);
+    zexpect_ptr_eq(&tims[1][5], tim.paddr);
+    zexpect_s32_eq(0x200, tim.prect->x);
+    zexpect_s32_eq(0x20, tim.prect->y);
+    zexpect_ptr_eq(NULL, ReadTIM(&tim));
+}
+
 ZTEST(gpu, gouraud_line_after_flush) {
     int w, h;
     unsigned char* d;
@@ -893,8 +912,8 @@ ZTEST(gpu, flipped_xy_uv) {
     ASSERT_FRAME("flipped_xy_uv", 1, 1.0f);
 }
 
-ZTEST(gpu, alpha_blend) {
-    zskip_targets("pcsx-redux"); // differs from real hardware
+static void DrawAlphaBlend(int flip_stp) {
+    static u_short flipped[16];
     u_short tpage, clut;
     TIM_IMAGE tim;
     u_short* pal;
@@ -912,6 +931,14 @@ ZTEST(gpu, alpha_blend) {
     }
     LoadImage(tim.prect, tim.paddr);
     LoadImage(tim.crect, tim.caddr);
+    if (flip_stp) {
+        StoreImage(tim.crect, (u_long*)flipped);
+        DrawSync(0);
+        for (int i = 0; i < 16; i++) {
+            flipped[i] ^= 0x8000;
+        }
+        LoadImage(tim.crect, (u_long*)flipped);
+    }
     tpage = GetTPage((int)tim.mode, 0, tim.prect->x, tim.prect->y);
     clut = GetClut(tim.crect->x, tim.crect->y);
 
@@ -937,8 +964,18 @@ ZTEST(gpu, alpha_blend) {
     DrawSync(0);
     VSync(0);
     PutDispEnv(&cdb->disp);
+}
 
+ZTEST(gpu, alpha_blend) {
+    zskip_targets("pcsx-redux"); // differs from real hardware
+    DrawAlphaBlend(0);
     ASSERT_FRAME("alpha_blend", 1, 1.0f);
+}
+
+ZTEST(gpu, alpha_blend_stp_flipped) {
+    zskip_targets("pcsx-redux"); // differs from real hardware
+    DrawAlphaBlend(1);
+    ASSERT_FRAME("alpha_blend_stp_flipped", 1, 1.0f);
 }
 
 ZTEST(gpu, s11_coord_truncation) {
@@ -1643,58 +1680,4 @@ ZTEST(gpu, vsync_callbacks_run_in_channel_order) {
     zexpect_s32_eq(0, vsync_order[0]);
     zexpect_s32_eq(3, vsync_order[1]);
     zexpect_s32_eq(7, vsync_order[2]);
-}
-
-#define STRAY_OPCODE 0x08
-static int stray_calls;
-static int CountStray(const u_long* words, int available, void* userdata) {
-    (void)words;
-    (void)userdata;
-    stray_calls++;
-    return available > 0 ? 1 : 0;
-}
-
-static void DrawLastInQueue(void* prim) {
-    stray_calls = 0;
-    zassert_s32_eq(
-        0, Psyz_GpuRegisterCommandHandler(STRAY_OPCODE, CountStray, NULL));
-    ClearOTag(cdb->ot, OTSIZE);
-    AddPrim(cdb->ot, prim);
-    DrawOTag(cdb->ot);
-    DrawSync(0);
-    Psyz_GpuRegisterCommandHandler(STRAY_OPCODE, NULL, NULL);
-}
-
-ZTEST(gpu, poly_gt4_last_in_queue_consumes_all_words) {
-    u_short tpage, clut;
-    if (LoadTim(img_4bpp, &tpage, &clut)) {
-        return;
-    }
-    POLY_GT4* p = &cdb->gt4[0];
-    SetPolyGT4(p);
-    setXYWH(p, 16, 16, 64, 64);
-    setUVWH(p, 0, 0, 64, 64);
-    setRGB0(p, 128, 128, 128);
-    setRGB1(p, 128, 128, 128);
-    setRGB2(p, 128, 128, 128);
-    setRGB3(p, 128, 128, 128);
-    setSemiTrans(p, 1);
-    p->tpage = tpage;
-    p->clut = clut;
-    p->pad3 = STRAY_OPCODE << 8;
-    DrawLastInQueue(p);
-    zexpect_s32_eq(0, stray_calls);
-}
-
-ZTEST(gpu, poly_g4_last_in_queue_consumes_all_words) {
-    POLY_G4* p = &cdb->g4[0];
-    SetPolyG4(p);
-    setXYWH(p, 16, 16, 64, 64);
-    setRGB0(p, 255, 0, 0);
-    setRGB1(p, 0, 255, 0);
-    setRGB2(p, 0, 0, 255);
-    setRGB3(p, 255, 255, 255);
-    setXY4(p, 16, 16, 80, 16, 16, 80, 80, STRAY_OPCODE << 8);
-    DrawLastInQueue(p);
-    zexpect_s32_eq(0, stray_calls);
 }

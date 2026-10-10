@@ -1,13 +1,29 @@
 #include "libsnd_private.h"
 
-#ifndef __psyz
-INCLUDE_ASM("asm/nonmatchings/libsnd/ssopenq", SsSeqOpen);
-#else
-short SsSeqOpenJ(u_long* addr, short vab_id);
-
-// Opens the SEQ at addr with the full MIDI event set, as SsSepOpen does,
-// and returns its access number.
 short SsSeqOpen(u_long* addr, short vab_id) {
+    short bit;
+    short flag;
+    short ret;
+    unsigned char exit_loop;
+    u8* seq;
+
+    flag = 0;
+    seq = (u8*)addr;
+    if (_snd_openflag == -1) {
+        printf("Can't Open Sequence data any more\n\n");
+        return -1;
+    }
+    bit = 0;
+    exit_loop = 0;
+    while (!exit_loop) {
+        if ((_snd_openflag & (1 << bit)) == 0U) {
+            flag = bit;
+            exit_loop = 1;
+        }
+        bit++;
+    }
+    _snd_openflag |= 1 << flag;
+    ret = _SsInitSoundSeq(flag, vab_id, seq);
     SsFCALL.noteon = (sCb)_SsNoteOn;
     SsFCALL.programchange = (sCb)_SsSetProgramChange;
     SsFCALL.metaevent = (sCb)_SsGetMetaEvent;
@@ -45,7 +61,8 @@ short SsSeqOpen(u_long* addr, short vab_id) {
     SsFCALL.ccentry[DE_ECHO_FB] = (sCb)_SsSetNrpnVabAttr17;
     SsFCALL.ccentry[DE_ECHO_DELAY] = (sCb)_SsSetNrpnVabAttr18;
     SsFCALL.ccentry[DE_DELAY] = (sCb)_SsSetNrpnVabAttr19;
-
-    return SsSeqOpenJ(addr, vab_id);
+    if (ret == -1) {
+        return -1;
+    }
+    return flag;
 }
-#endif

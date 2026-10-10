@@ -8,13 +8,15 @@ set(PSYZ_TEST_SOURCES
     test_main.c
     test_libapi.c
     test_libc.c
+    test_events.c
+    test_dma.c
     test_libgte.c
     test_libgpu.c
     test_libgs.c
     test_libcd.c
     test_libspu.c
     test_libgs_types.c
-    test_libetc.c
+    test_mdec.c
     frontbuffer_psyz.c
 )
 

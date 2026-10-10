@@ -26,6 +26,7 @@
 #endif
 
 #include "sdl3_common.h"
+#include "sdl3_draw.h"
 
 // selected at runtime based on the active GL profile; the shader bodies are
 // shared and must stay legal in both GLSL 330 core and GLSL ES 3.00 (the
@@ -480,8 +481,8 @@ bool InitPlatform() {
     return true;
 }
 
-static void PlatformBackend_SetDriverVsync(bool enable) {
-    SDL_GL_SetSwapInterval(enable ? 1 : 0);
+static bool PlatformBackend_SetDriverVsync(bool enable) {
+    return SDL_GL_SetSwapInterval(enable ? 1 : 0) && enable;
 }
 
 static void UpdateScissor(void);
@@ -1033,7 +1034,8 @@ int Draw_PushPrim(u_long* packets, int max_len) {
     Vertex* v;
 
     // to ensure we always have space, we pretend we want to allocate a quad
-    Draw_EnsureBufferWillNotOverflow(4, 6);
+    // Gouraud read-ahead can write a colour into a fifth vertex slot.
+    Draw_EnsureBufferWillNotOverflow(5, 6);
     v = vertex_cur;
     if (isShadeTex) {
         v->r = (unsigned char)(*packets >> 0);
@@ -1479,6 +1481,34 @@ void Draw_ResetBuffer(void) {
     index_cur = index_buf;
 }
 
+// the shader outputs alpha 0 on B-F texels and alpha 1 on opaque ones
+static void SetBlendMode(BlendMode mode) {
+    static BlendMode cur_mode = BLEND_ADD;
+    if (mode == cur_mode) {
+        return;
+    }
+    cur_mode = mode;
+    switch (mode) {
+    case BLEND_SUB:
+        glBlendEquationSeparate(GL_FUNC_REVERSE_SUBTRACT, GL_FUNC_ADD);
+        glBlendFuncSeparate(GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
+        break;
+    case BLEND_SUB_OPAQUE:
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        break;
+    default:
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        break;
+    }
+}
+
+static void DrawIndices(int start, int end) {
+    glDrawElements(GL_TRIANGLES, end - start, GL_UNSIGNED_SHORT,
+                   (const GLvoid*)((uintptr_t)start * sizeof(unsigned short)));
+}
+
 void Draw_FlushBuffer(void) {
     if (n_vertices == 0) {
         return;
@@ -1515,7 +1545,6 @@ void Draw_FlushBuffer(void) {
     }
     int prim_size = 3;
     int start = 0;
-    bool cur_subtract = false;
     while (start < n_indices) {
         Vertex* v = &vertex_buf[index_buf[start]];
         bool need_subtract = is_subtract_abr(v);
@@ -1528,18 +1557,21 @@ void Draw_FlushBuffer(void) {
             }
             end += prim_size;
         }
-        if (need_subtract != cur_subtract) {
-            glBlendEquation(
-                need_subtract ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD);
-            cur_subtract = need_subtract;
+        while (need_subtract && start < end) {
+            int group_end = SubtractGroupEnd(start, end);
+            SetBlendMode(BLEND_SUB);
+            DrawIndices(start, group_end);
+            if (!is_untextured(&vertex_buf[index_buf[start]])) {
+                SetBlendMode(BLEND_SUB_OPAQUE);
+                DrawIndices(start, group_end);
+            }
+            start = group_end;
         }
-        glDrawElements(
-            GL_TRIANGLES, end - start, GL_UNSIGNED_SHORT,
-            (const GLvoid*)((uintptr_t)start * sizeof(unsigned short)));
-        start = end;
-    }
-    if (cur_subtract) {
-        glBlendEquation(GL_FUNC_ADD);
+        SetBlendMode(BLEND_ADD);
+        if (start < end) {
+            DrawIndices(start, end);
+            start = end;
+        }
     }
     SyncScaledVramToNative();
     Draw_ResetBuffer();

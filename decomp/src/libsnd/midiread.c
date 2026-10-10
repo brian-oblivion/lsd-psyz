@@ -15,7 +15,7 @@ INCLUDE_ASM("asm/nonmatchings/libsnd/midiread", _SsGetSeqData);
 void _SsSeqPlay(short seq_access_num, short seq_num) {
     struct SeqStruct* score = &_ss_score[seq_access_num][seq_num];
     short ticks = score->unk54;
-    int left = score->unk90;
+    int left = score->delta_value;
     int sum;
 
     if (left - ticks > 0) {
@@ -23,21 +23,21 @@ void _SsSeqPlay(short seq_access_num, short seq_num) {
             score->unk52--;
         } else if (score->unk52 == 0) {
             score->unk52 = ticks;
-            score->unk90--;
+            score->delta_value--;
         } else {
-            score->unk90 = left - ticks;
+            score->delta_value = left - ticks;
         }
         return;
     }
     sum = left;
     for (;;) {
         _SsGetSeqData(seq_access_num, seq_num);
-        if (score->unk90 == 0) {
+        if (score->delta_value == 0) {
             continue;
         }
-        sum += score->unk90;
+        sum += score->delta_value;
         if (sum >= score->unk54) {
-            score->unk90 = sum - score->unk54;
+            score->delta_value = sum - score->unk54;
             return;
         }
     }
@@ -53,44 +53,44 @@ void _SsGetSeqData(short seq_access_num, short seq_num) {
     u8 data;
     u8 vel;
 
-    status = *score->unk0++;
+    status = *score->seq_ptr++;
     if (status & 0x80) {
-        score->channel = status & 0xF;
+        score->channel_idx = status & 0xF;
         switch (status & 0xF0) {
         case 0x90:
-            score->unk11 = 0x90;
-            data = *score->unk0++;
-            vel = *score->unk0++;
-            score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+            score->running_status = 0x90;
+            data = *score->seq_ptr++;
+            vel = *score->seq_ptr++;
+            score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
             SsFCALL.noteon(seq_access_num, seq_num, data, vel);
             break;
         case 0xB0:
-            score->unk11 = 0xB0;
-            data = *score->unk0++;
+            score->running_status = 0xB0;
+            data = *score->seq_ptr++;
             SsFCALL.control[CC_NUMBER](seq_access_num, seq_num, data);
             break;
         case 0xC0:
-            score->unk11 = 0xC0;
-            data = *score->unk0++;
+            score->running_status = 0xC0;
+            data = *score->seq_ptr++;
             SsFCALL.programchange(seq_access_num, seq_num, data);
             break;
         case 0xE0:
-            score->unk11 = 0xE0;
-            score->unk0++;
+            score->running_status = 0xE0;
+            score->seq_ptr++;
             SsFCALL.pitchbend(seq_access_num, seq_num);
             break;
         case 0xF0:
-            score->unk11 = 0xFF;
-            data = *score->unk0++;
+            score->running_status = 0xFF;
+            data = *score->seq_ptr++;
             SsFCALL.metaevent(seq_access_num, seq_num, data);
             break;
         }
         return;
     }
-    switch (score->unk11) {
+    switch (score->running_status) {
     case 0x90:
-        vel = *score->unk0++;
-        score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+        vel = *score->seq_ptr++;
+        score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
         SsFCALL.noteon(seq_access_num, seq_num, status, vel);
         break;
     case 0xB0:

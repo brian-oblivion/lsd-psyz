@@ -50,20 +50,17 @@ PsyzVSyncCb Psyz_SetVSyncCb(PsyzVSyncCb cb) {
     return prev;
 }
 
-extern void (*g_VsyncCallbacks[8])();
-
+// What VSync(n) does once its wait is over: the pads read, the
+// Psyz_SetVSyncCb callback once, and n vertical blanks raised, which run the
+// VSyncCallback functions. A host that paces the game's frames itself calls
+// it after presenting with Psyz_VideoVSync.
 void Psyz_VSyncRunCallbacks(int n) {
-    int i;
     ReadPadsOnVsync(); // this is done on vsync by the BIOS
     if (g_PsyzVsyncCb) {
         g_PsyzVsyncCb();
     }
     for (; n > 0; n--) {
-        for (i = 0; i < LEN(g_VsyncCallbacks); i++) {
-            if (g_VsyncCallbacks[i]) {
-                g_VsyncCallbacks[i]();
-            }
-        }
+        Psyz_KernelVBlank();
     }
 }
 
@@ -71,6 +68,7 @@ void Psyz_VSyncRunCallbacks(int n) {
 // previous VSync, as the SDK does for games that run at 30 or 20 fps.
 int VSync(int mode) {
     int elapsed;
+    Psyz_KernelPoll();
     if (mode < 0) {
         return Psyz_VideoVSync(-1);
     } else if (mode == 1) {
@@ -169,187 +167,11 @@ long ReadInitPadFlag(void) {
     return 0;
 }
 
-void ChangeClearPAD(long a) { NOT_IMPLEMENTED; }
+void ChangeClearPAD(long val) { (void)val; }
 
 // The console's 2 MB limit (or 8 MB on a development board) does not exist
 // on the host: nothing to change.
-void SetMem(unsigned long n) {}
-
-static unsigned long event_first_empty = 0;
-static struct EvCB events[0x100] = {0};
-
-// HwCARD events are not delivered by anything yet: they keep the answer
-// OpenEvent gave them (end of I/O, no error), whatever is tested or enabled.
-static int is_fixed_event(const struct EvCB* e) { return e->desc == HwCARD; }
-
-static long GetFirstFreeEvent() {
-    // event_first_empty brings the function to O(1) in an optimistic scenario,
-    // but it does not guarantee it always points to an empty event
-    // Search from event_first_empty to end
-    for (unsigned long i = event_first_empty; i < LEN(events); i++) {
-        if (!events[i].desc) {
-            return (long)i;
-        }
-    }
-    // Search from beginning to event_first_empty (wrap around)
-    for (unsigned long i = 0; i < event_first_empty; i++) {
-        if (!events[i].desc) {
-            return (long)i;
-        }
-    }
-    return -1;
-}
-long OpenEvent(unsigned long desc, long spec, long mode, long (*func)()) {
-    if (!desc) {
-        WARNF("invalid desc %08X", desc);
-        return -1;
-    }
-    long id = GetFirstFreeEvent();
-    if (id < 0) {
-        WARNF("run out of memory");
-        return -1;
-    }
-    struct EvCB* e = &events[id];
-    e->desc = desc;
-    e->spec = (int)spec;
-    e->mode = (int)mode;
-    e->FHandler = func;
-    e->system[0] = 0;
-    e->system[1] = 0;
-    int supported = 1;
-    switch (desc) {
-    case SwCARD:
-        // libcard delivers these (_card_info, _card_load), so they start
-        // disabled, as on the console, until EnableEvent
-        switch (spec) {
-        case EvSpIOE:
-        case EvSpERROR:
-        case EvSpTIMOUT:
-        case EvSpNEW:
-            e->status = EvStWAIT;
-            break;
-        default:
-            supported = 0;
-            break;
-        }
-        break;
-    case HwCARD:
-        // fixed answers, which TestEvent does not reset (is_fixed_event)
-        switch (spec) {
-        case EvSpIOE: // always report end of IO
-            e->status = 1;
-            break;
-        case EvSpERROR:  // never errors
-        case EvSpTIMOUT: // never timeout
-        case EvSpNEW:    // never report a new memory card
-            e->status = 0;
-            break;
-        default:
-            supported = 0;
-            break;
-        }
-        break;
-    default:
-        supported = 0;
-        break;
-    }
-    if (!supported) {
-        e->status = EvStWAIT;
-        WARNF("unsupported spec:%08X, desc:%04X, mode:%04X", spec, desc, mode);
-    }
-    event_first_empty = id + 1;
-    // Wrap around if event_first_empty is beyond array bounds
-    if (event_first_empty >= LEN(events)) {
-        event_first_empty = 0;
-    }
-    return id;
-}
-long CloseEvent(unsigned long event) {
-    if (event >= LEN(events)) {
-        WARNF("invalid event ID %d", event);
-        return 0;
-    }
-    events[event].desc = 0;
-    event_first_empty = event;
-    return 1;
-}
-long WaitEvent(unsigned long event) {
-    if (event >= LEN(events)) {
-        WARNF("invalid event ID %d", event);
-        return 0;
-    }
-    // never waits
-    if (!is_fixed_event(&events[event]) &&
-        events[event].status == EvStALREADY) {
-        events[event].status = EvStACTIVE;
-    }
-    return 1;
-}
-long EnableEvent(unsigned long event) {
-    if (event >= LEN(events)) {
-        WARNF("invalid event ID %d", event);
-        return 0;
-    }
-    if (!is_fixed_event(&events[event]) && events[event].status == EvStWAIT) {
-        events[event].status = EvStACTIVE;
-    }
-    return 1;
-}
-long DisableEvent(unsigned long event) {
-    if (event >= LEN(events)) {
-        WARNF("invalid event ID %d", event);
-        return 0;
-    }
-    if (!is_fixed_event(&events[event])) {
-        events[event].status = EvStWAIT;
-    }
-    return 1;
-}
-long TestEvent(unsigned long event) {
-    if (event >= LEN(events)) {
-        WARNF("invalid event ID %d", event);
-        return 0;
-    }
-    struct EvCB* e = &events[event];
-    if (is_fixed_event(e)) {
-        return e->status;
-    }
-    if (e->status == EvStALREADY) {
-        e->status = EvStACTIVE;
-        return 1;
-    }
-    return 0;
-}
-
-void PS1_EnterCriticalSection(void) { NOT_IMPLEMENTED; }
-void PS1_ExitCriticalSection(void) { NOT_IMPLEMENTED; }
-
-void DeliverEvent(unsigned ev1, unsigned ev2) {
-    for (unsigned long i = 0; i < LEN(events); i++) {
-        struct EvCB* e = &events[i];
-        if (e->desc != ev1 || (unsigned)e->spec != ev2 || is_fixed_event(e) ||
-            e->status != EvStACTIVE) {
-            continue;
-        }
-        if (e->mode == EvMdINTR) {
-            if (e->FHandler) {
-                e->FHandler();
-            }
-        } else {
-            e->status = EvStALREADY;
-        }
-    }
-}
-
-void UnDeliverEvent(unsigned ev1, unsigned ev2) {
-    for (unsigned long i = 0; i < LEN(events); i++) {
-        struct EvCB* e = &events[i];
-        if (e->desc == ev1 && (unsigned)e->spec == ev2 && !is_fixed_event(e) &&
-            e->mode == EvMdNOINTR && e->status == EvStALREADY) {
-            e->status = EvStACTIVE;
-        }
-    }
-}
+void SetMem(unsigned long n) { (void)n; }
 
 void SystemError(char c, long n) {
     NOT_IMPLEMENTED;

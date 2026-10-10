@@ -44,7 +44,7 @@ int _SsVmKeyOn(int seq_sep_no, short vabId, short prog, unsigned short note,
     _svm_cur.mvol = pg->mvol;
     _svm_cur.mpan = pg->mpan;
     _svm_cur.prog_tones = pg->tones;
-    if ((u8)_svm_cur.field_7_fake_program >= _svm_vh->ps) {
+    if ((u8)_svm_cur.fake_program >= _svm_vh->ps) {
         return -1;
     }
     if (vol == 0) {
@@ -54,7 +54,7 @@ int _SsVmKeyOn(int seq_sep_no, short vabId, short prog, unsigned short note,
 
     count = 0;
     for (i = 0; i < (u8)_svm_cur.prog_tones; i++) {
-        tn = &_svm_tn[(u8)_svm_cur.field_7_fake_program * 16 + i];
+        tn = &_svm_tn[(u8)_svm_cur.fake_program * 16 + i];
         if ((u8)note < tn->min || tn->max < (u8)note) {
             continue;
         }
@@ -67,7 +67,7 @@ int _SsVmKeyOn(int seq_sep_no, short vabId, short prog, unsigned short note,
     for (i = 0; i < count; i++) {
         _svm_cur.tone_vag_idx = vags[i];
         _svm_cur.tone = tones[i];
-        tn = &_svm_tn[(u8)_svm_cur.field_7_fake_program * 16 + tones[i]];
+        tn = &_svm_tn[(u8)_svm_cur.fake_program * 16 + tones[i]];
         _svm_cur.tone_prior = tn->prior;
         _svm_cur.tone_vol = tn->vol;
         _svm_cur.tone_pan = tn->pan;
@@ -84,20 +84,20 @@ int _SsVmKeyOn(int seq_sep_no, short vabId, short prog, unsigned short note,
         }
         _svm_voice[voice].unk1b = 1;
         _svm_voice[voice].unk2 = 0;
-        _svm_voice[voice].unke = seq_sep_no;
+        _svm_voice[voice].seq_sep_no = seq_sep_no;
         _svm_voice[voice].vabId = _svm_cur.vabId;
-        _svm_voice[voice].unk10 = (u8)_svm_cur.field_7_fake_program;
+        _svm_voice[voice].fake_program = (u8)_svm_cur.fake_program;
         _svm_voice[voice].prog = prog;
         if (score != NULL) {
             // NoteOn scaled the velocity by the channel volume, which is not
             // 0 here, or vol would be 0.
-            _svm_voice[voice].unk8 = vol * 127 / score->vol[score->channel];
+            _svm_voice[voice].voll1 = vol * 127 / score->vol[score->channel_idx];
         }
-        _svm_voice[voice].unka = pan;
+        _svm_voice[voice].pan = pan;
         _svm_voice[voice].tone = tones[i];
         _svm_voice[voice].note = note;
-        _svm_voice[voice].unk18 = (u8)_svm_cur.tone_prior;
-        _svm_voice[voice].unk0 = vags[i];
+        _svm_voice[voice].priority = (u8)_svm_cur.tone_prior;
+        _svm_voice[voice].vag_idx = vags[i];
 
         _SsVmDoAllocate();
         if (vags[i] == 0xFF) {
@@ -118,11 +118,11 @@ int _SsVmKeyOff(int seq_sep_no, short vabId, short prog, unsigned short note) {
 
     for (i = 0; i < _SsVmMaxVoice; i++) {
         if (_svm_voice[i].note != (short)note || _svm_voice[i].prog != prog ||
-            _svm_voice[i].unke != (short)seq_sep_no ||
+            _svm_voice[i].seq_sep_no != (short)seq_sep_no ||
             _svm_voice[i].vabId != vabId) {
             continue;
         }
-        if (_svm_voice[i].unk0 == 0xFF) {
+        if (_svm_voice[i].vag_idx == 0xFF) {
             vmNoiseOff(i);
         } else {
             _svm_cur.voice = i;

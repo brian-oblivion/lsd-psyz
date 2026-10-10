@@ -8,7 +8,7 @@ void _SsContRpn2(short seq_access_num, short seq_num, unsigned char data) {
     struct SeqStruct* score = &_ss_score[seq_access_num][seq_num];
 
     score->unk15 = data;
-    score->unk1A++;
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->unk1F++;
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif

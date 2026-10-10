@@ -23,10 +23,10 @@ int _SsVmSetVol(
         unsigned level, l, r;
         unsigned p;
 
-        if (v->unke != seq_sep_no || v->prog != prog || v->vabId != vabId) {
+        if (v->seq_sep_no != seq_sep_no || v->prog != prog || v->vabId != vabId) {
             continue;
         }
-        level = v->unk8 * (u16)vol / 127;
+        level = v->voll1 * (u16)vol / 127;
         level = _svm_vh->mvol * (level * 0x3FFF) / 16129;
         level = level * _svm_pg[v->prog].mvol;
         level = level * _svm_tn[v->tone].vol / 16129;
@@ -39,7 +39,7 @@ int _SsVmSetVol(
         } else {
             l = l * (0x7F - p) / 63;
         }
-        p = _svm_pg[v->unk10].mpan;
+        p = _svm_pg[v->fake_program].mpan;
         if (p < 0x40) {
             r = r * p / 63;
         } else {

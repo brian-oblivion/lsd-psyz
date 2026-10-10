@@ -145,10 +145,10 @@ static void DispatchPackets(u_long* buf, int len, const PreciseVertex* prec) {
 }
 
 int Psyz_GpuExeque() {
-    // 32-bit targets dispatch straight into the draw buffer (GPU_Enqueue's
-    // fast path), so it can hold primitives that are not drawn yet: draw
-    // them, rather than drop them, before anything else touches the VRAM.
-    Draw_FlushBuffer();
+    if (sizeof(void*) == 4) {
+        // 32-bit targets dispatch straight into the draw buffer
+        Draw_FlushBuffer();
+    }
     Draw_ResetBuffer();
     if (queue_len > 0) {
         DispatchPackets(queue_buf, queue_len,
@@ -201,8 +201,7 @@ static void GPU_Enqueue(u_long* packets) {
             INFOF("GPU queue full, calling exeque");
             Psyz_GpuExeque();
         }
-        // The packet still goes in after a flush: it was dropped, and its
-        // words left whatever an earlier frame had there.
+        // a flush empties the queue; the packet that did not fit still goes in
         if (sizeof(u_long) == 8) {
             // Wow okay, this part is uuuugly...
             // Gpu code is usually written to a u_long array, which will work

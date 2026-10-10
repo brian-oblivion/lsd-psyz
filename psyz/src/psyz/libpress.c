@@ -1,265 +1,60 @@
-// libpress: the MDEC (motion decoder) in software, and the VLC (Huffman)
-// decode of Sony's BS bitstreams (versions 1 and 2, as STR movies carry).
+// libpress on psyz: the MDEC's driver calls (MDEC_*) over psyz's MDEC
+// (mdec.c), under the decompiled DecDCT* calls, and the VLC (Huffman) decode
+// of Sony's BS bitstreams (versions 1 and 2, as STR movies carry).
 //
-// DecDCTvlc turns a BS frame into the MDEC's run-level codes; DecDCTin hands
-// them to the "MDEC"; DecDCTout decodes macroblocks into the caller's buffer.
 // On the console the transfers run on DMA in the background; here each one
-// completes before it returns, and DecDCTout's callback runs before
-// DecDCTout returns. Games that DecDCTout again from that callback (the usual
-// strip-by-strip loop) therefore recurse once per strip.
+// completes before it returns and raises its DMA channel's completion, so
+// DecDCToutCallback's callback runs as DecDCTout returns.
 //
-// References: psx-spx's "MDEC" chapter, for the run-level format, the
-// quantization and the colour conversion; ISO/IEC 11172-2 (MPEG-1) table
-// B.14, the AC coefficient codes BS shares.
+// References: psx-spx's "MDEC" chapter for the run-level format; ISO/IEC
+// 11172-2 (MPEG-1) table B.14, the AC coefficient codes BS shares.
 
 #include <psyz.h>
 #include <libpress.h>
 #include <psyz/log.h>
-#include <math.h>
-#include <string.h>
+#include "mdec.h"
+#include "../internal.h"
+#include "../../../decomp/src/libpress/libpress_private.h"
 
 // The MDEC command word DecDCTvlc writes ahead of the run-level codes:
 // command 1 (decode), 15-bit output; the low 16 bits count the words that
 // follow.
 #define MDEC_CMD_DECODE_15BIT 0x38000000
-#define MDEC_DEPTH_MASK 0x18000000
-#define MDEC_DEPTH_24BIT 0x10000000
-#define MDEC_SET_BIT15 0x02000000
 #define RL_END_OF_BLOCK 0xFE00
 
-// The default quantization table, in zig-zag order: MPEG-1's intra matrix
-// with a DC step of 2, as DecDCTReset loads it for both luma and chroma.
-static const u_char default_iq[64] = {
-    2,  16, 16, 19, 16, 19, 22, 22, 22, 22, 22, 22, 26, 24, 26, 27,
-    27, 27, 26, 26, 26, 26, 27, 27, 27, 29, 29, 29, 34, 34, 34, 29,
-    29, 29, 27, 27, 29, 29, 32, 32, 34, 34, 37, 38, 37, 35, 35, 34,
-    35, 38, 38, 40, 40, 40, 48, 48, 46, 46, 56, 56, 58, 69, 69, 83,
-};
+#define DMA_MDEC_IN 0
+#define DMA_MDEC_OUT 1
 
-// zig-zag position -> row-major index in an 8x8 block
-static const u_char zigzag[64] = {
-    0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,
-    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6,  7,  14, 21, 28,
-    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
-    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
-};
-
-static struct {
-    u_char iq_y[64];
-    u_char iq_c[64];
-    const u_short* in;     // run-level codes left to decode
-    const u_short* in_end; // one past the last
-    u32 command;           // DecDCTin's command word, with its mode applied
-    DecDCCb in_cb;
-    DecDCCb out_cb;
-    int initialized;
-} mdec;
-
-static float idct_basis[8][8]; // [x][u] = C(u)/2 * cos((2x+1)u pi/16)
-
-static void init_tables(void) {
-    if (mdec.initialized) {
-        return;
-    }
-    for (int x = 0; x < 8; x++) {
-        for (int u = 0; u < 8; u++) {
-            float c = u == 0 ? (float)M_SQRT1_2 : 1.0f;
-            idct_basis[x][u] =
-                0.5f * c * cosf((float)((2 * x + 1) * u) * (float)M_PI / 16.0f);
-        }
-    }
-    mdec.initialized = 1;
-}
-
-void DecDCTReset(int mode) {
-    init_tables();
-    memcpy(mdec.iq_y, default_iq, sizeof(mdec.iq_y));
-    memcpy(mdec.iq_c, default_iq, sizeof(mdec.iq_c));
-    mdec.in = mdec.in_end = NULL;
+// Mode 0 resets the MDEC and loads the default quantization and IDCT tables,
+// the ones DecDCTGetEnv reads (DecDCTPutEnv sends them).
+void MDEC_reset(int mode) {
+    Psyz_MdecReset();
     if (mode == 0) {
-        mdec.in_cb = NULL;
-        mdec.out_cb = NULL;
+        DECDCTENV env;
+        DecDCTPutEnv(DecDCTGetEnv(&env));
     }
 }
 
-DECDCTENV* DecDCTGetEnv(DECDCTENV* env) {
-    memcpy(env->iq_y, mdec.iq_y, sizeof(env->iq_y));
-    memcpy(env->iq_c, mdec.iq_c, sizeof(env->iq_c));
-    return env;
+// buf[0] is the command word, the size words after it its data.
+void MDEC_in(u_long* buf, int size) {
+    const u32* words = (const u32*)buf;
+    if (Psyz_MdecCommand(words[0], words + 1, (size_t)size) != 0) {
+        WARNF("MDEC command %08X with %d words rejected", words[0], size);
+    }
+    Psyz_KernelDmaComplete(DMA_MDEC_IN);
 }
 
-DECDCTENV* DecDCTPutEnv(DECDCTENV* env) {
-    memcpy(mdec.iq_y, env->iq_y, sizeof(mdec.iq_y));
-    memcpy(mdec.iq_c, env->iq_c, sizeof(mdec.iq_c));
-    return env;
+void MDEC_out(u_long* buf, int size) {
+    Psyz_MdecRead(buf, (size_t)size);
+    Psyz_KernelDmaComplete(DMA_MDEC_OUT);
 }
 
-// mode bit 0: 24-bit output (else 15-bit); bit 1: set bit 15 of each 15-bit
-// pixel (the GPU's mask bit).
-void DecDCTin(u_long* buf, int mode) {
-    const u32 header = ((const u32*)buf)[0];
-    init_tables();
-    mdec.command = header & ~MDEC_DEPTH_MASK;
-    mdec.command |= (mode & 1) ? MDEC_DEPTH_24BIT : (MDEC_CMD_DECODE_15BIT & MDEC_DEPTH_MASK);
-    if (mode & 2) {
-        mdec.command |= MDEC_SET_BIT15;
-    }
-    // The codes follow the header word, two to a 32-bit word.
-    mdec.in = (const u_short*)((const u32*)buf + 1);
-    mdec.in_end = mdec.in + (header & 0xFFFF) * 2;
-    if (mdec.in_cb) {
-        mdec.in_cb();
-    }
-}
+int MDEC_in_sync(void) { return 0; }
 
-int DecDCTinSync(int mode) {
-    (void)mode;
-    return 0;
-}
+int MDEC_out_sync(void) { return 0; }
 
-int DecDCToutSync(int mode) {
-    (void)mode;
-    return 0;
-}
-
-DecDCCb DecDCTinCallback(DecDCCb func) {
-    DecDCCb prev = mdec.in_cb;
-    mdec.in_cb = func;
-    return prev;
-}
-
-DecDCCb DecDCToutCallback(DecDCCb func) {
-    DecDCCb prev = mdec.out_cb;
-    mdec.out_cb = func;
-    return prev;
-}
-
-static int sign_extend10(int n) { return (n & 0x200) ? (n | ~0x3FF) : (n & 0x3FF); }
-
-// One 8x8 block: run-level codes, dequantized, through the IDCT. Returns 0
-// when the input ran out first.
-static int decode_block(float out[64], const u_char* iq) {
-    int coef[64];
-    memset(coef, 0, sizeof(coef));
-    // Padding (0xFE00 words) may sit between blocks.
-    while (mdec.in < mdec.in_end && *mdec.in == RL_END_OF_BLOCK) {
-        mdec.in++;
-    }
-    if (mdec.in >= mdec.in_end) {
-        return 0;
-    }
-    int n = *mdec.in++;
-    const int qscale = n >> 10;
-    int k = 0;
-    int val = sign_extend10(n) * iq[0];
-    for (;;) {
-        if (qscale == 0) {
-            val = sign_extend10(n) * 2;
-        }
-        if (val < -0x400) {
-            val = -0x400;
-        } else if (val > 0x3FF) {
-            val = 0x3FF;
-        }
-        coef[qscale ? zigzag[k] : k] = val;
-        if (mdec.in >= mdec.in_end) {
-            break;
-        }
-        n = *mdec.in++;
-        if (n == RL_END_OF_BLOCK) {
-            break;
-        }
-        k += (n >> 10) + 1;
-        if (k > 63) {
-            break;
-        }
-        val = (sign_extend10(n) * iq[k] * qscale + 4) / 8;
-    }
-
-    // Separable 2D IDCT: rows, then columns.
-    float tmp[64];
-    for (int v = 0; v < 8; v++) {
-        for (int x = 0; x < 8; x++) {
-            float s = 0.0f;
-            for (int u = 0; u < 8; u++) {
-                s += idct_basis[x][u] * (float)coef[v * 8 + u];
-            }
-            tmp[v * 8 + x] = s;
-        }
-    }
-    for (int x = 0; x < 8; x++) {
-        for (int y = 0; y < 8; y++) {
-            float s = 0.0f;
-            for (int v = 0; v < 8; v++) {
-                s += idct_basis[y][v] * tmp[v * 8 + x];
-            }
-            out[y * 8 + x] = s;
-        }
-    }
-    return 1;
-}
-
-// 15-bit output rounds each component to 5 bits; truncating left movies a
-// half step (~4/255) darker than on the console.
-static u_short to5(int v) { return v >= 0xF8 ? 31 : (v + 4) >> 3; }
-
-static int clamp8(float v) {
-    int i = (int)lrintf(v);
-    return i < 0 ? 0 : i > 255 ? 255 : i;
-}
-
-// One 16x16 macroblock (Cr, Cb, then the four Y blocks) as 15-bit pixels
-// (256 halfwords) or 24-bit ones (768 bytes), row by row.
-static int decode_macroblock(void* dst) {
-    float cr[64], cb[64], y[4][64];
-    if (!decode_block(cr, mdec.iq_c) || !decode_block(cb, mdec.iq_c)) {
-        return 0;
-    }
-    for (int i = 0; i < 4; i++) {
-        if (!decode_block(y[i], mdec.iq_y)) {
-            return 0;
-        }
-    }
-    const int depth24 = (mdec.command & MDEC_DEPTH_MASK) == MDEC_DEPTH_24BIT;
-    const u_short bit15 = (mdec.command & MDEC_SET_BIT15) ? 0x8000 : 0;
-    for (int py = 0; py < 16; py++) {
-        for (int px = 0; px < 16; px++) {
-            const int c = (py >> 1) * 8 + (px >> 1);
-            const float l =
-                y[(py >> 3) * 2 + (px >> 3)][(py & 7) * 8 + (px & 7)] + 128.0f;
-            const int r = clamp8(l + 1.402f * cr[c]);
-            const int g = clamp8(l - 0.3437f * cb[c] - 0.7143f * cr[c]);
-            const int b = clamp8(l + 1.772f * cb[c]);
-            if (depth24) {
-                u_char* p = (u_char*)dst + (py * 16 + px) * 3;
-                p[0] = r;
-                p[1] = g;
-                p[2] = b;
-            } else {
-                ((u_short*)dst)[py * 16 + px] =
-                    bit15 | to5(r) | (to5(g) << 5) | (to5(b) << 10);
-            }
-        }
-    }
-    return 1;
-}
-
-// size: the 32-bit words to produce, a whole number of macroblocks (128
-// words each at 15 bits, 192 at 24).
-void DecDCTout(u_long* buf, int size) {
-    const int depth24 = (mdec.command & MDEC_DEPTH_MASK) == MDEC_DEPTH_24BIT;
-    const int mb_words = depth24 ? 192 : 128;
-    u32* out = (u32*)buf;
-    for (int done = 0; done + mb_words <= size; done += mb_words) {
-        if (!decode_macroblock(out + done)) {
-            memset(out + done, 0, (size - done) * sizeof(u32));
-            break;
-        }
-    }
-    if (mdec.out_cb) {
-        mdec.out_cb();
-    }
-}
+// Idle: no command busy, nothing requested.
+u_long MDEC_status(void) { return 0; }
 
 // The VLC decode. BS streams are read as little-endian 16-bit words, each
 // from its top bit down.
@@ -388,11 +183,6 @@ static void build_ac_tables(void) {
 }
 
 static int bs_size_words(const u_short* bs) { return bs[0]; }
-
-int DecDCTBufSize(u_long* bs) {
-    // The MDEC command word, then the run-level codes.
-    return bs_size_words((const u_short*)bs) + 1;
-}
 
 // Decodes a whole BS frame (header: run-level size in words, 0x3800, the
 // quantization scale, the version) into `buf`. Returns 0: everything was

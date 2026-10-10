@@ -28,11 +28,20 @@ option(GTE_USE_HW_SQRT "Use hardware-accelerated sqrt (C math library)" OFF)
 # only the console's geometry can be set.
 option(PSYZ_PRECISE_GEOMETRY "Build in precise geometry (Psyz_VideoSetGeometry)" ON)
 
+# CD streaming (CdRead2, St*) from psyz's own host code instead of the
+# decompiled ring library, which needs StCdInterrupt to run on psyz first.
+option(PSYZ_HOST_CD_STREAM "CdRead2 and St* streaming from host code" ON)
+
+# libsnd's C follows Psy-Q 4.0. On, the functions whose behaviour libsnd 3.3
+# changed (the build LSD: Dream Emulator ships) follow 3.3 instead.
+option(PSYZ_LIBSND_33 "libsnd behaves as libsnd 3.3 where 4.0 differs" OFF)
+
 set(PSYZ_SOURCES
     src/platform/psyz.c
     src/psyz/dma.c
     src/psyz/libapi.c
     src/psyz/libc.c
+    src/psyz/kernel.c
     src/psyz/libetc.c
     src/psyz/libgpu.c
     ../decomp/src/libcard/card.c
@@ -244,6 +253,8 @@ set(PSYZ_SOURCES
     src/psyz/libsnd.c
     src/psyz/libsn.c
     src/psyz/libpress.c
+    ../decomp/src/libpress/libpress.c
+    src/psyz/mdec.c
 )
 
 # Choose sqrt implementation
@@ -269,12 +280,14 @@ if(EMSCRIPTEN)
     list(APPEND PSYZ_SOURCES src/platform/plat_unix.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_log.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_audio.c)
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_os.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_gl.c)
     list(APPEND PSYZ_SOURCES src/psyz/psyz_spu.c)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(APPEND PSYZ_SOURCES src/platform/plat_win.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_log.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_audio.c)
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_os.c)
     list(APPEND PSYZ_SOURCES src/psyz/psyz_spu.c)
     list(APPEND PSYZ_SOURCES src/dbgserver/dbgserver.c)
     list(APPEND PSYZ_SOURCES src/platform/module_win.c)
@@ -298,6 +311,7 @@ elseif(ANDROID)
     list(APPEND PSYZ_SOURCES src/platform/plat_unix.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_log.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_audio.c)
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_os.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_gpu.c)
     list(APPEND PSYZ_SOURCES src/psyz/psyz_spu.c)
     list(APPEND PSYZ_SOURCES src/dbgserver/dbgserver.c)
@@ -307,6 +321,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     list(APPEND PSYZ_SOURCES src/platform/plat_unix.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_log.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_audio.c)
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_os.c)
     list(APPEND PSYZ_SOURCES src/psyz/psyz_spu.c)
     list(APPEND PSYZ_SOURCES src/dbgserver/dbgserver.c)
     list(APPEND PSYZ_SOURCES src/platform/module_unix.c)
@@ -325,6 +340,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     list(APPEND PSYZ_SOURCES src/platform/plat_unix.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_log.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_audio.c)
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_os.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_gpu.c)
     list(APPEND PSYZ_SOURCES src/ios/ios_platform.m)
     list(APPEND PSYZ_SOURCES src/psyz/psyz_spu.c)
@@ -348,6 +364,7 @@ elseif(PSP)
     list(APPEND PSYZ_SOURCES src/psp/psp_input.c)
     list(APPEND PSYZ_SOURCES src/psp/psp_misc.c)
     list(APPEND PSYZ_SOURCES src/psp/psp_audio.c)
+    list(APPEND PSYZ_SOURCES src/psp/psp_os.c)
     list(APPEND PSYZ_SOURCES src/psp/psp_sas.c)
     list(APPEND PSYZ_LIBS pspdebug pspgu pspdisplay pspge pspdmac pspctrl pspaudio
         psppower pspsascore psputility)
@@ -359,6 +376,7 @@ else()
     list(APPEND PSYZ_SOURCES src/platform/plat_unix.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_log.c)
     list(APPEND PSYZ_SOURCES src/platform/sdl3_audio.c)
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_os.c)
     list(APPEND PSYZ_SOURCES src/psyz/psyz_spu.c)
     list(APPEND PSYZ_SOURCES src/dbgserver/dbgserver.c)
     list(APPEND PSYZ_SOURCES src/platform/module_unix.c)
@@ -371,11 +389,35 @@ else()
     endif()
 endif()
 
+if(NOT PSP AND NOT EMSCRIPTEN AND PSYZ_RENDERER STREQUAL "sdl3_gpu")
+    list(APPEND PSYZ_SOURCES src/platform/sdl3_software.c)
+endif()
+
 add_library(psyz STATIC ${PSYZ_SOURCES})
 target_compile_definitions(psyz PUBLIC __psyz)
 if(PSYZ_PRECISE_GEOMETRY)
     target_compile_definitions(psyz PRIVATE PSYZ_PRECISE_GEOMETRY)
 endif()
+if(PSYZ_HOST_CD_STREAM)
+    target_compile_definitions(psyz PRIVATE PSYZ_HOST_CD_STREAM)
+else()
+    target_sources(psyz PRIVATE
+        ../decomp/src/libcd/c_002.c
+        ../decomp/src/libcd/c_003.c
+        ../decomp/src/libcd/c_004.c
+        ../decomp/src/libcd/c_005.c
+        ../decomp/src/libcd/c_007.c
+        ../decomp/src/libcd/c_008.c
+        ../decomp/src/libcd/c_009.c
+        ../decomp/src/libcd/c_010.c
+        ../decomp/src/libcd/cdread2.c
+        ../decomp/src/libcd/cdrom.c
+    )
+endif()
+if(PSYZ_LIBSND_33)
+    target_compile_definitions(psyz PRIVATE PSYZ_LIBSND_33)
+endif()
+target_compile_definitions(psyz PRIVATE _FILE_OFFSET_BITS=64)
 if(EMSCRIPTEN)
     target_compile_definitions(psyz PUBLIC PLATFORM_WEB=1)
 endif()

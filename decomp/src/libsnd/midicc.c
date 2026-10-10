@@ -10,28 +10,28 @@ INCLUDE_ASM("asm/nonmatchings/libsnd/midicc", _SsSetControlChange);
 
 static void ContPortamento(short seq_access_num, short seq_num, u8 data) {
     struct SeqStruct* score = &_ss_score[seq_access_num][seq_num];
-    u8 prog = score->programs[score->channel];
+    u8 prog = score->programs[score->channel_idx];
     ProgAtr pg;
     VagAtr vag;
     int i;
 
-    SsUtGetProgAtr(score->unk26, prog, &pg);
+    SsUtGetProgAtr(score->vab_id, prog, &pg);
     for (i = 0; i < pg.tones; i++) {
-        SsUtGetVagAtr(score->unk26, prog, i, &vag);
+        SsUtGetVagAtr(score->vab_id, prog, i, &vag);
         if (data < 0x40) {
             vag.mode = 2;
         } else if (data < 0x80) {
             vag.mode = 0;
         }
-        SsUtSetVagAtr(score->unk26, prog, i, &vag);
+        SsUtSetVagAtr(score->vab_id, prog, i, &vag);
     }
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 
 void _SsSetControlChange(
     short seq_access_num, short seq_num, unsigned char control) {
     struct SeqStruct* score = &_ss_score[seq_access_num][seq_num];
-    u8 data = *score->unk0++;
+    u8 data = *score->seq_ptr++;
 
     switch (control) {
     case 0:
@@ -74,6 +74,6 @@ void _SsSetControlChange(
         SsFCALL.control[CC_RESETALL](seq_access_num, seq_num);
         return;
     }
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif

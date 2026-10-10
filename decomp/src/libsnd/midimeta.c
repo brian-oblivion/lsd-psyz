@@ -16,13 +16,13 @@ void _SsGetMetaEvent(short seq_access_num, short seq_num, unsigned char type) {
         unsigned ticks;
         int usec;
 
-        usec = *score->unk0++ << 16;
-        usec |= *score->unk0++ << 8;
-        usec |= *score->unk0++;
+        usec = *score->seq_ptr++ << 16;
+        usec |= *score->seq_ptr++ << 8;
+        usec |= *score->seq_ptr++;
         score->unk94 = 60000000 / usec;
-        ticks = score->unk50 * score->unk94 * 10;
+        ticks = score->resolution * score->unk94 * 10;
         if (ticks < divisor) {
-            score->unk52 = (VBLANK_MINUS * 600) / (score->unk50 * score->unk94);
+            score->unk52 = (VBLANK_MINUS * 600) / (score->resolution * score->unk94);
             score->unk54 = score->unk52;
         } else {
             score->unk52 = -1;
@@ -31,19 +31,19 @@ void _SsGetMetaEvent(short seq_access_num, short seq_num, unsigned char type) {
                 score->unk54++;
             }
         }
-        score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+        score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
         return;
     }
     if (type != 0x2F) {
         return;
     }
     score->unk21++;
-    if (score->unk20 == 0 || score->unk21 < score->unk20) {
-        score->delta_value = 0;
+    if (score->l_count == 0 || score->unk21 < score->l_count) {
+        score->unk88 = 0;
         score->unk18 = 0;
-        score->unk90 = 0;
-        score->unk0 = score->read_pos;
-        if (score->unk20 != 0) {
+        score->delta_value = 0;
+        score->seq_ptr = score->read_pos;
+        if (score->l_count != 0) {
             score->loop_pos = score->read_pos;
         }
         return;
@@ -60,6 +60,6 @@ void _SsGetMetaEvent(short seq_access_num, short seq_num, unsigned char type) {
         score->play_mode = 0;
     }
     _SsVmSeqKeyOff((seq_num << 8) | seq_access_num);
-    score->unk90 = score->unk54;
+    score->delta_value = score->unk54;
 }
 #endif

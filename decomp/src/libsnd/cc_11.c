@@ -7,11 +7,11 @@ INCLUDE_ASM("asm/nonmatchings/libsnd/cc_11", _SsContExpression);
 void _SsContExpression(
     short seq_access_num, short seq_num, unsigned char data) {
     struct SeqStruct* score = &_ss_score[seq_access_num][seq_num];
-    u8 ch = score->channel;
+    u8 ch = score->channel_idx;
 
-    _SsVmSetProgVol(score->unk26, score->programs[ch], data);
-    _SsVmSetVol((seq_num << 8) | seq_access_num, score->unk26,
+    _SsVmSetProgVol(score->vab_id, score->programs[ch], data);
+    _SsVmSetVol((seq_num << 8) | seq_access_num, score->vab_id,
                 score->programs[ch], score->vol[ch], score->panpot[ch]);
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif

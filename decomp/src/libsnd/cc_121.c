@@ -10,11 +10,11 @@ void _SsContResetAll(short seq_access_num, short seq_num) {
 
     SsUtReverbOff();
     _SsVmDamperOff();
-    score->programs[score->channel] = score->channel;
-    score->unk13 = 0;
+    score->programs[score->channel_idx] = score->channel_idx;
+    score->unk1C = 0;
     score->unk15 = 0;
-    score->vol[score->channel] = 0x7F;
-    score->panpot[score->channel] = 0x40;
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->vol[score->channel_idx] = 0x7F;
+    score->panpot[score->channel_idx] = 0x40;
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif

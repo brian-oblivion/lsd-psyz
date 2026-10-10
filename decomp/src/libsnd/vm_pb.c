@@ -18,12 +18,12 @@ short _SsVmPBVoice(short voice, short seq_sep_no, short vabId, short prog,
     int fine;
     int product;
 
-    if (_svm_voice[voice].unke != seq_sep_no ||
+    if (_svm_voice[voice].seq_sep_no != seq_sep_no ||
         _svm_voice[voice].vabId != vabId || _svm_voice[voice].prog != prog) {
         return 0;
     }
     tn = &_svm_tn[(u16)(_svm_voice[voice].tone +
-                        ((u8)_svm_cur.field_7_fake_program << 4))];
+                        ((u8)_svm_cur.fake_program << 4))];
     note = (u16)_svm_voice[voice].note;
     if (amount > 0) {
         product = amount * tn->pbmax;

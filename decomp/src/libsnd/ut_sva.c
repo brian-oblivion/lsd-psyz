@@ -11,7 +11,7 @@ short SsUtSetVagAtr(short vabId, short prog, short toneNum, VagAtr* vagatrptr) {
         return -1;
     }
     _SsVmVSetUp(vabId, prog);
-    tn = &_svm_tn[(short)(toneNum + _svm_cur.field_7_fake_program * 0x10)];
+    tn = &_svm_tn[(short)(toneNum + _svm_cur.fake_program * 0x10)];
     tn->prior = vagatrptr->prior;
     tn->mode = vagatrptr->mode;
     tn->vol = vagatrptr->vol;

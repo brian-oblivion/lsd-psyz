@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <kernel.h>
 #include "../internal.h"
 #include "../../decomp/src/libspu/libspu_private.h"
 
@@ -411,6 +412,13 @@ static size_t cd_buf_count = 0; // number of valid frames in buffer
 static int is_playing = 0; // pause or unpause seeking through the CD stream
 static int is_muted = 0;   // return empty samples while CD keeps streaming
 
+static void cd_data_end(void) {
+    if (CD_cbready) {
+        CD_cbready(CdlDataEnd, NULL);
+    }
+    Psyz_KernelRaise(HwCdRom, EvSpTRAP);
+}
+
 // CD audio pull callback — called by SPU when its internal ring buffer
 // runs low. Fills `buf` with up to `max_frames` interleaved stereo frames.
 // One mutex lock per batch rather than per frame.
@@ -450,8 +458,8 @@ static size_t cdda_pull_samples(short* buf, size_t max_frames) {
     }
 end:
     Psyz_AudioUnlock();
-    if (hit_eof && CD_cbready) {
-        CD_cbready(CdlDataEnd, NULL);
+    if (hit_eof) {
+        Psyz_KernelPost(cd_data_end);
     }
     return written;
 }
@@ -475,6 +483,11 @@ static const short xa_zigzag_table[7][XA_ZIGZAG_TAPS] = {
     {-5, 17, -35, 70, -23, -68, 347, -839, 2062, -4681, 15367, 21472, -5882, 2810, -1352, 635, -235, 26, 43, -35, 16, -8, 2, 0, 0, 0, 0, 0, 0},
 };
 // clang-format on
+// Real hardware keeps reading sectors and discards the ones rejected by the
+// filter, so once the selected file/channel ends playback goes silent. Give up
+// after this many consecutive rejected sectors instead of scanning the disc
+// for the next matching one, which is unrelated audio.
+#define XA_MAX_SECTOR_GAP 64
 
 static struct {
     short decoded[XA_DECODED_MAX_FRAMES * 2];
@@ -490,6 +503,7 @@ static struct {
     short out[7 * 2];   // the 44100Hz samples of the last six inputs
     int out_left;       // how many of out[] are still to be handed out
     int cur_abs_sector; // absolute last sector used, for CdlGetlocL
+    int stream_ended;   // filtered file/channel ran out, emit silence
 } xa;
 
 static void xa_reset_stream(void) {
@@ -500,6 +514,7 @@ static void xa_reset_stream(void) {
     memset(xa.ring, 0, sizeof(xa.ring));
     xa.ring_pos = 0;
     xa.out_left = 0;
+    xa.stream_ended = 0;
 }
 
 static int xa_sector_matches(unsigned char file, unsigned char channel) {
@@ -575,7 +590,8 @@ static int xa_decode_user_mono_4bit(const unsigned char* user) {
 
 static int xa_read_and_decode_sector(void) {
     unsigned char sector[SECTOR_SIZE];
-    while (1) {
+    int gap = 0;
+    while (!xa.stream_ended) {
         const size_t n = fread(sector, 1, SECTOR_SIZE, track_file);
         if (n != SECTOR_SIZE) {
             return 0; // EOF or short read
@@ -585,10 +601,11 @@ static int xa_read_and_decode_sector(void) {
         const unsigned char channel = sector[0x11];
         const unsigned char submode = sector[0x12];
         const unsigned char ci = sector[0x13];
-        if ((submode & 0x44) != 0x44) {
-            continue; // data sector, skip from XA stream
-        }
-        if (!xa_sector_matches(file, channel)) {
+        if ((submode & 0x44) != 0x44 || !xa_sector_matches(file, channel)) {
+            // data sector or filtered out, skip from XA stream
+            if (++gap >= XA_MAX_SECTOR_GAP) {
+                xa.stream_ended = 1;
+            }
             continue;
         }
         const unsigned char* user = &sector[0x18];
@@ -607,6 +624,10 @@ static int xa_read_and_decode_sector(void) {
         xa.decoded_pos = 0;
         return 1;
     }
+    memset(xa.decoded, 0, sizeof(xa.decoded));
+    xa.decoded_count = XA_DECODED_MAX_FRAMES / 2;
+    xa.decoded_pos = 0;
+    return 1;
 }
 
 // Push the next 37800 Hz stereo input frame into the zigzag rings.
@@ -671,8 +692,8 @@ end:
         xa.active = 0;
     }
     Psyz_AudioUnlock();
-    if (hit_eof && CD_cbready) {
-        CD_cbready(CdlDataEnd, NULL);
+    if (hit_eof) {
+        Psyz_KernelPost(cd_data_end);
     }
     return written;
 }
@@ -779,7 +800,10 @@ static int read_raw_sector(int sector, u_char* out) {
     return result;
 }
 
-// CD streaming, for STR movies: CdRead2 with CdlModeStream starts it, and
+#ifdef PSYZ_HOST_CD_STREAM
+// CD streaming, for STR movies, until the decompiled ring library (libcd's
+// St* in decomp/) can run on psyz: it needs StCdInterrupt and CdlReadS
+// delivering sectors. CdRead2 with CdlModeStream starts it, and
 // StGetNext hands out one video frame at a time, assembled from the
 // stream's data sectors (each opens with a 32-byte StHEADER and carries
 // 2016 bytes of the frame). The drive is modelled by time: a sector is
@@ -921,6 +945,7 @@ static int st_next_frame(void) {
     }
     return 0;
 }
+#endif
 
 static int need_cdda_rewind = 1;
 // play on CDDA mode only (not XA)
@@ -972,7 +997,9 @@ static void psyz_xa_read(void) {
 }
 
 static void psyz_stop() {
+#ifdef PSYZ_HOST_CD_STREAM
     st_stop();
+#endif
     need_cdda_rewind = 1;
     Psyz_AudioLock();
     is_playing = 0;
@@ -986,7 +1013,9 @@ static void psyz_stop() {
 }
 
 static void psyz_pause() {
+#ifdef PSYZ_HOST_CD_STREAM
     st_stop();
+#endif
     Psyz_AudioLock();
     is_playing = 0;
     xa.active = 0;
@@ -1111,7 +1140,15 @@ int CD_ready(int mode, u_char* result) {
     }
     return CdlDataReady;
 }
+static int CD_command(u_char com, u_char* param, u_char* result, s32 arg3);
+
 int CD_cw(u_char com, u_char* param, u_char* result, s32 arg3) {
+    int ret = CD_command(com, param, result, arg3);
+    Psyz_KernelRaise(HwCdRom, EvSpTRAP);
+    return ret;
+}
+
+static int CD_command(u_char com, u_char* param, u_char* result, s32 arg3) {
     int total;
     int t;
     int abs_sector;
@@ -1376,6 +1413,7 @@ int CdRead(int sectors, u_long* buf, int mode) {
     return 1;
 }
 
+#ifdef PSYZ_HOST_CD_STREAM
 // CdRead2: start a CdlModeStream read at CD_pos for the St* calls below,
 // with any XA audio in it (CdlModeRT) played as psyz_xa_read plays it.
 int CdRead2(long mode) {
@@ -1394,6 +1432,7 @@ int CdRead2(long mode) {
     }
     return 1;
 }
+#endif
 
 int CdReadSync(int mode, u_char* result) {
     (void)mode;
@@ -1403,6 +1442,7 @@ int CdReadSync(int mode, u_char* result) {
     return 0;
 }
 
+#ifdef PSYZ_HOST_CD_STREAM
 // Returns 0 with the next frame's data in *addr and its sector header in
 // *header, or 1 when no whole frame has been read yet.
 u_long StGetNext(u_long** addr, u_long** header) {
@@ -1450,3 +1490,6 @@ void StClearRing(void) {
 }
 
 void StUnSetRing(void) { st_stop(); }
+#else
+void StCdInterrupt(void) { NOT_IMPLEMENTED; }
+#endif

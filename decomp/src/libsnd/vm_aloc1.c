@@ -1,12 +1,71 @@
 #include "libsnd_private.h"
 
-#ifndef __psyz
-INCLUDE_ASM("asm/nonmatchings/libsnd/vm_aloc1", _SsVmAlloc);
+#if !defined(__psyz) || !defined(PSYZ_LIBSND_33)
+char _SsVmAlloc(short voice) {
+    u8 alloc;
+    u16 lowestKeyStat;
+    char matches;
+    u16 lowestAge;
+    u8 lowest;
+    u8 i;
+    u16 lowestPrior;
+
+    alloc = 99;
+    lowestKeyStat = -1;
+    matches = 0;
+    lowestAge = 0;
+    lowest = 99;
+    lowestPrior = _svm_cur.tone_prior;
+    for (i = 0; i < _SsVmMaxVoice; i++) {
+        if (_svm_voice[i].unk1b == 0 && _svm_voice[i].key_stat == 0) {
+            alloc = i;
+            break;
+        }
+        if (_svm_voice[i].priority < lowestPrior) {
+            lowestPrior = _svm_voice[i].priority;
+            lowest = i;
+            lowestKeyStat = _svm_voice[i].key_stat;
+            lowestAge = _svm_voice[i].unk2;
+            matches = 1;
+        } else if (_svm_voice[i].priority == lowestPrior) {
+            matches++;
+            if (_svm_voice[i].key_stat < lowestKeyStat) {
+                lowestAge = _svm_voice[i].unk2;
+                lowestKeyStat = _svm_voice[i].key_stat;
+                lowest = i;
+            } else if (_svm_voice[i].key_stat == lowestKeyStat) {
+                if (lowestAge < _svm_voice[i].unk2) {
+                    lowestAge = _svm_voice[i].unk2;
+                    lowest = i;
+                }
+            }
+        }
+    }
+    if (alloc == 99) {
+        alloc = lowest;
+        if (matches == 0) {
+            alloc = _SsVmMaxVoice;
+        }
+    }
+    if (alloc < _SsVmMaxVoice) {
+        for (i = 0; i < _SsVmMaxVoice; i++) {
+            _svm_voice[i].unk2++;
+        }
+        _svm_voice[alloc].unk2 = 0;
+        _svm_voice[alloc].priority = _svm_cur.tone_prior;
+        if (_svm_voice[alloc].unk1b == 2) {
+            SpuSetNoiseVoice(0, 0xFFFFFF);
+        }
+    }
+    _svm_voice[alloc].auto_pan = 0;
+    return alloc;
+}
 #else
-// Picks the voice for the tone in _svm_cur: the last free voice, or else the
-// busy voice of lowest priority (at most the tone's), the quietest envelope
-// and then the oldest key-on breaking ties. Returns _SsVmMaxVoice when every
-// busy voice outranks the tone. Written from libsnd 3.3's SpuVmAlloc.
+// libsnd 3.3's SpuVmAlloc. Picks the voice for the tone in _svm_cur: the
+// last free voice (4.0 takes the first), or else the busy voice of lowest
+// priority (at most the tone's), the quietest envelope and then the oldest
+// key-on breaking ties. Returns _SsVmMaxVoice when every busy voice outranks
+// the tone. Unlike 4.0 it leaves the voice's auto_pan.
 char _SsVmAlloc(short voice) {
     int chosen = 99;
     int best = 99;
@@ -18,23 +77,23 @@ char _SsVmAlloc(short voice) {
 
     for (i = 0; i < _SsVmMaxVoice; i++) {
         struct SpuVoice* v = &_svm_voice[i];
-        if (v->unk1b == 0 && v->unk6 == 0) {
+        if (v->unk1b == 0 && v->key_stat == 0) {
             chosen = i;
             continue;
         }
-        if (v->unk18 < threshold) {
-            threshold = v->unk18;
+        if (v->priority < threshold) {
+            threshold = v->priority;
             best = i;
-            bestEnvx = v->unk6;
+            bestEnvx = v->key_stat;
             bestAge = v->unk2;
             found = 1;
-        } else if (v->unk18 == threshold) {
+        } else if (v->priority == threshold) {
             found++;
-            if (v->unk6 < bestEnvx) {
+            if (v->key_stat < bestEnvx) {
                 bestAge = v->unk2;
-                bestEnvx = v->unk6;
+                bestEnvx = v->key_stat;
                 best = i;
-            } else if (v->unk6 == bestEnvx && bestAge < (short)v->unk2) {
+            } else if (v->key_stat == bestEnvx && bestAge < (short)v->unk2) {
                 bestAge = (short)v->unk2;
                 best = i;
             }
@@ -48,7 +107,7 @@ char _SsVmAlloc(short voice) {
             _svm_voice[i].unk2++;
         }
         _svm_voice[chosen].unk2 = 0;
-        _svm_voice[chosen].unk18 = (u8)_svm_cur.tone_prior;
+        _svm_voice[chosen].priority = (u8)_svm_cur.tone_prior;
         if (_svm_voice[chosen].unk1b == 2) {
             SpuSetNoiseVoice(SPU_OFF, SPU_ALLCH);
         }

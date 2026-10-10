@@ -4,6 +4,7 @@
 #include <psyz/log.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "../internal.h"
 #ifdef _WIN32
 #include <direct.h>
 #endif
@@ -57,51 +58,61 @@ long _card_auto(long val) {
     return val;
 }
 
-long _card_info(long chan) {
+static long last_chan;
+
+// Raises the end of a card operation with spec, as SwCARD (sw_desc) and
+// HwCARD events. The cards live as host directories; only the first slot of
+// each port has one (no multi-tap), so the others time out like an empty port.
+static long card_op(unsigned int sw_desc, long chan, unsigned int spec) {
     if (!validate_chan(chan)) {
         return 0;
     }
-    if (!card_present(chan)) {
-        DeliverEvent(SwCARD, EvSpTIMOUT);
-    } else if (!card_confirmed[chan >> 4]) {
-        DeliverEvent(SwCARD, EvSpNEW);
-    } else {
-        DeliverEvent(SwCARD, EvSpIOE);
+    last_chan = chan;
+    if (sw_desc) {
+        Psyz_KernelRaise(sw_desc, spec);
     }
+    Psyz_KernelRaise(HwCARD, spec);
     return 1;
 }
 
-// Every card present is formatted: its directory exists (_bu_init).
-long _card_load(long chan) {
-    if (!validate_chan(chan)) {
-        return 0;
-    }
-    DeliverEvent(SwCARD, card_present(chan) ? EvSpIOE : EvSpTIMOUT);
-    return 1;
+static unsigned int card_spec(long chan) {
+    return card_present(chan) ? EvSpIOE : EvSpTIMOUT;
 }
+
+long _card_info(long chan) {
+    unsigned int spec = card_spec(chan);
+    if (spec == EvSpIOE && validate_chan(chan) && !card_confirmed[chan >> 4]) {
+        spec = EvSpNEW;
+    }
+    return card_op(SwCARD, chan, spec);
+}
+
+// Every card present is formatted: its directory exists (_bu_init).
+long _card_load(long chan) { return card_op(SwCARD, chan, card_spec(chan)); }
 
 // Keeps the next _card_read or _card_write from answering EvSpNEW, which on
 // the host they never do.
 void _new_card(void) {}
 
 long _card_status(long drv) {
-    NOT_IMPLEMENTED;
-    return 0;
+    (void)drv;
+    return 1;
 }
 
-void InitCARD2(long val) { NOT_IMPLEMENTED; }
-
-long StartCARD2(void) {
-    NOT_IMPLEMENTED;
-    return 0;
+long _card_wait(long drv) {
+    (void)drv;
+    return 1;
 }
 
-long StopCARD2(void) {
-    NOT_IMPLEMENTED;
-    return 0;
-}
+unsigned long _card_chan(void) { return (unsigned long)last_chan; }
 
-void _ExitCard(void) { NOT_IMPLEMENTED; }
+void InitCARD2(long val) { (void)val; }
+
+long StartCARD2(void) { return 1; }
+
+long StopCARD2(void) { return 1; }
+
+void _ExitCard(void) {}
 
 static void _bzero(unsigned char* p, int n) { memset(p, 0, n); }
 
@@ -155,15 +166,19 @@ long _card_sector_write(long chan, long block, unsigned char* buf) {
 }
 
 long _card_write(long chan, long block, unsigned char* buf) {
-    // no sectors to write on the host, but the write confirms the card
+    LOG_ONCE("raw sectors are not emulated, only the completion event");
+    (void)block;
+    (void)buf;
+    // the write confirms the card
     if (validate_chan(chan) && card_present(chan)) {
         card_confirmed[chan >> 4] = 1;
     }
-    NOT_IMPLEMENTED;
-    return 0;
+    return card_op(0, chan, card_spec(chan));
 }
 
 long _card_read(long chan, long block, unsigned char* buf) {
-    NOT_IMPLEMENTED;
-    return 0;
+    LOG_ONCE("raw sectors are not emulated, only the completion event");
+    (void)block;
+    (void)buf;
+    return card_op(0, chan, card_spec(chan));
 }

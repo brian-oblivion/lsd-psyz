@@ -11,54 +11,54 @@ INCLUDE_ASM("asm/nonmatchings/libsnd/cc_6", _SsContDataEntry);
 // whose RPN 1 and 2 rewrite each tone unchanged.
 void _SsContDataEntry(short seq_access_num, short seq_num, unsigned char data) {
     struct SeqStruct* score = &_ss_score[seq_access_num][seq_num];
-    u8 prog = score->programs[score->channel];
+    u8 prog = score->programs[score->channel_idx];
     ProgAtr pg;
     VagAtr vag = {0};
     int i;
 
-    SsUtGetProgAtr(score->unk26, prog, &pg);
+    SsUtGetProgAtr(score->vab_id, prog, &pg);
     if (score->unk18 == 1 && score->unk10 == 0) {
         score->unk19 = data;
         score->unk10 = 1;
-        score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+        score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
         return;
     }
-    if (score->unk17 != 30 && score->unk17 != 20) {
-        score->unk16 = data;
+    if (score->unk1E != 30 && score->unk1E != 20) {
+        score->unk1D = data;
         score->unk1B++;
-        score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+        score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
         return;
     }
-    if (score->unk1A == 2) {
-        if (score->unk15 == 0 && score->unk13 <= 2) {
+    if (score->unk1F == 2) {
+        if (score->unk15 == 0 && score->unk1C <= 2) {
             for (i = 0; i < pg.tones; i++) {
-                SsUtGetVagAtr(score->unk26, prog, i, &vag);
-                if (score->unk13 == 0) {
+                SsUtGetVagAtr(score->vab_id, prog, i, &vag);
+                if (score->unk1C == 0) {
                     vag.pbmin = vag.pbmax = data & 0x7F;
                 }
-                SsUtSetVagAtr(score->unk26, prog, i, &vag);
+                SsUtSetVagAtr(score->vab_id, prog, i, &vag);
             }
         }
-        score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
-        score->unk1A = 0;
+        score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
+        score->unk1F = 0;
         return;
     }
     if (score->unk1B == 2) {
-        if (score->unk16 < 20) {
-            if (score->unk17 == 16) {
+        if (score->unk1D < 20) {
+            if (score->unk1E == 16) {
                 for (i = 0; i < pg.tones; i++) {
-                    SsFCALL.ccentry[score->unk16](
-                        score->unk26, prog, i, vag, score->unk16, data);
+                    SsFCALL.ccentry[score->unk1D](
+                        score->vab_id, prog, i, vag, score->unk1D, data);
                 }
             } else {
-                SsFCALL.ccentry[score->unk16](
-                    score->unk26, prog, score->unk17, vag, score->unk16, data);
+                SsFCALL.ccentry[score->unk1D](
+                    score->vab_id, prog, score->unk1E, vag, score->unk1D, data);
             }
         }
-        score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+        score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
         score->unk1B = 0;
         return;
     }
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif

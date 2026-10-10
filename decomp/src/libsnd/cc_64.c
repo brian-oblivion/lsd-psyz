@@ -12,6 +12,6 @@ void _SsContDamper(short seq_access_num, short seq_num, unsigned char data) {
     } else {
         _SsVmDamperOn();
     }
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif

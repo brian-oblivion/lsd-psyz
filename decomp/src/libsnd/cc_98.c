@@ -12,14 +12,14 @@ void _SsContNrpn1(short seq_access_num, short seq_num, unsigned char data) {
     if (score->unk18 == 1 && score->unk10 == 0) {
         score->unk19 = data;
         score->unk10 = 1;
-    } else if (score->unk17 != 30 && score->unk17 != 20) {
-        score->unk16 = data;
+    } else if (score->unk1E != 30 && score->unk1E != 20) {
+        score->unk1D = data;
         score->unk1B++;
     }
-    if (score->unk17 == 40 &&
+    if (score->unk1E == 40 &&
         _SsMarkCallback[seq_access_num][seq_num] != NULL) {
         _SsMarkCallback[seq_access_num][seq_num](seq_access_num, seq_num, data);
     }
-    score->unk90 = _SsReadDeltaValue(seq_access_num, seq_num);
+    score->delta_value = _SsReadDeltaValue(seq_access_num, seq_num);
 }
 #endif
