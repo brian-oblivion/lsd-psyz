@@ -10,6 +10,10 @@
 const PreciseVertex* precise_draw_words = NULL;
 PsyzGeometry precise_mode = PSYZ_GEOMETRY_CONSOLE;
 int precise_fade = 0;
+int precise_depth = 0;
+PreciseProjection precise_projection = {256.0f, 256.0f, 160.0f, 120.0f};
+int precise_ao_radius = 0;
+float precise_ao_strength = 0.0f;
 
 #ifdef PSYZ_PRECISE_GEOMETRY
 
@@ -110,6 +114,22 @@ int Precise_SetFade(int on) {
     return 0;
 }
 
+int Psyz_VideoSetAmbientOcclusion(int radius, float strength) {
+    if (radius < 0 || strength < 0.0f) {
+        return -1;
+    }
+    if (radius > 0 && !table) {
+        table = calloc(TABLE_MASK + 1, sizeof(Entry));
+        if (!table) {
+            return -1;
+        }
+    }
+    precise_depth = radius > 0;
+    precise_ao_radius = radius;
+    precise_ao_strength = strength;
+    return 0;
+}
+
 #else // PSYZ_PRECISE_GEOMETRY
 
 void Precise_Put(const void* addr, const PreciseVertex* v) {}
@@ -127,5 +147,9 @@ int Psyz_VideoSetGeometry(PsyzGeometry geometry) {
 PsyzGeometry Psyz_VideoGetGeometry(void) { return PSYZ_GEOMETRY_CONSOLE; }
 
 int Precise_SetFade(int on) { return on ? -1 : 0; }
+
+int Psyz_VideoSetAmbientOcclusion(int radius, float strength) {
+    return radius == 0 ? 0 : -1;
+}
 
 #endif // PSYZ_PRECISE_GEOMETRY

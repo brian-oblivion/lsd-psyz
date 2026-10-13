@@ -24,8 +24,9 @@ int Draw_SetHorizontalGrid(
 }
 
 // x, y are in VRAM pixels: whole ones but for precise geometry's vertices.
-// w is the vertex's depth for a perspective-correct primitive (TPAGE_PRECISE)
-// and ignored otherwise.
+// w is the vertex's view-space depth when every vertex of its polygon has
+// one (precise geometry or ambient occlusion), else 0. It maps the texture
+// with perspective only in a TPAGE_PRECISE primitive.
 typedef struct {
     float x, y, w;
     unsigned short u, v, c, t;
@@ -42,6 +43,7 @@ typedef struct {
 
 #define VRGBA(p) (*(unsigned int*)(&((p).r)))
 #define SET_TC(p, tpage, clut)                                                 \
+    (p)->w = 0.0f,                                                             \
     (p)->t =                                                                   \
         (u16)((tpage) |                                                        \
               (color_depth == PSYZ_COLOR_DEPTH_24 ? TPAGE_FULLCOLOR : 0)),     \
@@ -116,9 +118,10 @@ static inline unsigned char FadeAlpha(unsigned char a, float fade) {
                      : (unsigned char)(keep * 0x80 + 0.5f);
 }
 
-// Once the polygon's n vertices are in v: those with a precise vertex are
-// drawn there, and if all have one, with perspective from their depth; those
-// with a fade are drawn that much transparent.
+// Once the polygon's n vertices are in v: with precise geometry, those with
+// a precise vertex are drawn there; if all have one, they carry its depth,
+// and with perspective map their texture with it; those with a fade are
+// drawn that much transparent.
 static inline void PreciseApply(Vertex* v, int n) {
     bool all = true;
     int i;
@@ -127,16 +130,20 @@ static inline void PreciseApply(Vertex* v, int n) {
             v[i].a = FadeAlpha(v[i].a, prec_poly[i].fade);
         }
         if (prec_poly[i].w > 0.0f) {
-            v[i].x = prec_poly[i].x;
-            v[i].y = prec_poly[i].y;
+            if (PRECISE_ON) {
+                v[i].x = prec_poly[i].x;
+                v[i].y = prec_poly[i].y;
+            }
         } else {
             all = false;
         }
     }
-    if (all && precise_mode == PSYZ_GEOMETRY_PERSPECTIVE) {
+    if (all) {
         for (i = 0; i < n; i++) {
             v[i].w = prec_poly[i].w;
-            v[i].t |= TPAGE_PRECISE;
+            if (precise_mode == PSYZ_GEOMETRY_PERSPECTIVE) {
+                v[i].t |= TPAGE_PRECISE;
+            }
         }
     }
 }

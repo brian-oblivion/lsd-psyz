@@ -16,6 +16,9 @@
 #include "shaders/psx_frag_dxil.h"
 #include "shaders/clear_vert_dxil.h"
 #include "shaders/clear_frag_dxil.h"
+// No D3D12 build of ambient occlusion's shaders (nor of psx's depth output)
+// yet: build_shaders.sh needs a DXC that runs; ambient occlusion stays off.
+#define NO_AO_SHADERS
 #define psx_vert psx_vert_dxil
 #define psx_vert_len psx_vert_dxil_len
 #define psx_frag psx_frag_dxil
@@ -29,6 +32,9 @@
 #include "shaders/psx_frag_msl.h"
 #include "shaders/clear_vert_msl.h"
 #include "shaders/clear_frag_msl.h"
+#include "shaders/fullscreen_vert_msl.h"
+#include "shaders/ao_frag_msl.h"
+#include "shaders/ao_composite_frag_msl.h"
 #define psx_vert psx_vert_msl
 #define psx_vert_len psx_vert_msl_len
 #define psx_frag psx_frag_msl
@@ -37,11 +43,20 @@
 #define clear_vert_len clear_vert_msl_len
 #define clear_frag clear_frag_msl
 #define clear_frag_len clear_frag_msl_len
+#define fullscreen_vert fullscreen_vert_msl
+#define fullscreen_vert_len fullscreen_vert_msl_len
+#define ao_frag ao_frag_msl
+#define ao_frag_len ao_frag_msl_len
+#define ao_composite_frag ao_composite_frag_msl
+#define ao_composite_frag_len ao_composite_frag_msl_len
 #else
 #include "shaders/psx_vert_spv.h"
 #include "shaders/psx_frag_spv.h"
 #include "shaders/clear_vert_spv.h"
 #include "shaders/clear_frag_spv.h"
+#include "shaders/fullscreen_vert_spv.h"
+#include "shaders/ao_frag_spv.h"
+#include "shaders/ao_composite_frag_spv.h"
 #define psx_vert psx_vert_spv
 #define psx_vert_len psx_vert_spv_len
 #define psx_frag psx_frag_spv
@@ -50,6 +65,12 @@
 #define clear_vert_len clear_vert_spv_len
 #define clear_frag clear_frag_spv
 #define clear_frag_len clear_frag_spv_len
+#define fullscreen_vert fullscreen_vert_spv
+#define fullscreen_vert_len fullscreen_vert_spv_len
+#define ao_frag ao_frag_spv
+#define ao_frag_len ao_frag_spv_len
+#define ao_composite_frag ao_composite_frag_spv
+#define ao_composite_frag_len ao_composite_frag_spv_len
 #endif
 
 typedef struct {
@@ -76,6 +97,22 @@ static SDL_GPUTransferBuffer* tex_upload_transfer = NULL;
 static SDL_GPUTransferBuffer* tex_download_transfer = NULL;
 static SDL_GPUGraphicsPipeline* pipe_tri[BLEND_COUNT];
 static SDL_GPUGraphicsPipeline* pipe_clear = NULL;
+
+// Ambient occlusion (Psyz_VideoSetAmbientOcclusion): psx.frag's depth goes
+// to vram_depth, beside the render target and the same size, through the
+// pipe_tri_depth pipelines; at present, pipe_ao and pipe_ao_composite draw
+// the displayed picture darkened into ao_out, which goes to the window
+// instead. VRAM itself is never changed.
+static SDL_GPUTexture* vram_depth = NULL;
+static Uint32 vram_depth_w = 0, vram_depth_h = 0;
+static SDL_GPUTexture* ao_raw = NULL; // R8: the occlusion, before the blur
+static SDL_GPUTexture* ao_out = NULL; // the picture darkened
+static Uint32 ao_w = 0, ao_h = 0;
+static SDL_GPUGraphicsPipeline* pipe_tri_depth[BLEND_COUNT];
+static SDL_GPUGraphicsPipeline* pipe_depth_clear = NULL;
+static SDL_GPUGraphicsPipeline* pipe_ao = NULL;
+static SDL_GPUGraphicsPipeline* pipe_ao_composite = NULL;
+#define DEPTH_FORMAT SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT
 static SDL_GPUCommandBuffer* pending_cmd = NULL;
 
 static Posi display_area = {0, 0};
@@ -193,7 +230,7 @@ static SDL_GPUShader* CreateShader(
 }
 
 static SDL_GPUGraphicsPipeline* CreatePsxPipeline(
-    SDL_GPUShader* vs, SDL_GPUShader* fs, BlendMode mode) {
+    SDL_GPUShader* vs, SDL_GPUShader* fs, BlendMode mode, bool depth) {
     const SDL_GPUVertexBufferDescription vb_desc = {
         .slot = 0,
         .pitch = sizeof(Vertex),
@@ -255,9 +292,20 @@ static SDL_GPUGraphicsPipeline* CreatePsxPipeline(
                 .enable_blend = true,
             },
     };
-    const SDL_GPUColorTargetDescription target = {
-        .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        .blend_state = blend[mode],
+    // psx.frag's depth: written where its alpha is 1, kept where it is 0
+    static const SDL_GPUColorTargetBlendState depth_blend = {
+        .src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA,
+        .dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+        .color_blend_op = SDL_GPU_BLENDOP_ADD,
+        .src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE,
+        .dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+        .alpha_blend_op = SDL_GPU_BLENDOP_ADD,
+        .enable_blend = true,
+    };
+    const SDL_GPUColorTargetDescription targets[2] = {
+        {.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+         .blend_state = blend[mode]},
+        {.format = DEPTH_FORMAT, .blend_state = depth_blend},
     };
     const SDL_GPUGraphicsPipelineCreateInfo info = {
         .vertex_shader = vs,
@@ -272,8 +320,8 @@ static SDL_GPUGraphicsPipeline* CreatePsxPipeline(
         .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .target_info =
             {
-                .color_target_descriptions = &target,
-                .num_color_targets = 1,
+                .color_target_descriptions = targets,
+                .num_color_targets = depth ? 2 : 1,
             },
     };
     SDL_GPUGraphicsPipeline* pipe =
@@ -284,9 +332,10 @@ static SDL_GPUGraphicsPipeline* CreatePsxPipeline(
     return pipe;
 }
 
-// used only for a fast hardware ClearImage
+// used only for a fast hardware ClearImage; with depth, clears vram_depth
+// instead (to no depth, whatever the colour)
 static SDL_GPUGraphicsPipeline* CreateClearPipeline(
-    SDL_GPUShader* vs, SDL_GPUShader* fs) {
+    SDL_GPUShader* vs, SDL_GPUShader* fs, bool depth) {
     const SDL_GPUVertexBufferDescription vb_desc = {
         .slot = 0,
         .pitch = sizeof(Vertex),
@@ -305,7 +354,17 @@ static SDL_GPUGraphicsPipeline* CreateClearPipeline(
     // blending disabled: the clear color (including alpha 0, the PS1 mask
     // bit) is written as-is, matching glClearColor(r, g, b, 0) + glClear
     const SDL_GPUColorTargetDescription target = {
-        .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+        .format = depth ? DEPTH_FORMAT : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+        .blend_state =
+            {
+                .src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+                .dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+                .color_blend_op = SDL_GPU_BLENDOP_ADD,
+                .src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+                .dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+                .alpha_blend_op = SDL_GPU_BLENDOP_ADD,
+                .enable_blend = depth,
+            },
     };
     const SDL_GPUGraphicsPipelineCreateInfo info = {
         .vertex_shader = vs,
@@ -318,6 +377,28 @@ static SDL_GPUGraphicsPipeline* CreateClearPipeline(
                 .num_vertex_attributes = LENU(attribs),
             },
         .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLESTRIP,
+        .target_info =
+            {
+                .color_target_descriptions = &target,
+                .num_color_targets = 1,
+            },
+    };
+    SDL_GPUGraphicsPipeline* pipe =
+        SDL_CreateGPUGraphicsPipeline(device, &info);
+    if (!pipe) {
+        ERRORF("SDL_CreateGPUGraphicsPipeline: %s", SDL_GetError());
+    }
+    return pipe;
+}
+
+// a full-screen pass of ambient occlusion into one target of format
+static SDL_GPUGraphicsPipeline* CreateFullscreenPipeline(
+    SDL_GPUShader* vs, SDL_GPUShader* fs, SDL_GPUTextureFormat format) {
+    const SDL_GPUColorTargetDescription target = {.format = format};
+    const SDL_GPUGraphicsPipelineCreateInfo info = {
+        .vertex_shader = vs,
+        .fragment_shader = fs,
+        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .target_info =
             {
                 .color_target_descriptions = &target,
@@ -415,12 +496,47 @@ static bool CreateGpuResources(void) {
         clear_vert, clear_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
     SDL_GPUShader* clear_fs = CreateShader(
         clear_frag, clear_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0);
+#ifdef NO_AO_SHADERS
+    SDL_GPUShader *full_vs = NULL, *ao_fs = NULL, *ao_comp_fs = NULL;
+#else
+    SDL_GPUShader* full_vs = CreateShader(
+        fullscreen_vert, fullscreen_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
+    SDL_GPUShader* ao_fs =
+        CreateShader(ao_frag, ao_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    SDL_GPUShader* ao_comp_fs =
+        CreateShader(ao_composite_frag, ao_composite_frag_len,
+                     SDL_GPU_SHADERSTAGE_FRAGMENT, 3, 1);
+#endif
     bool shaders_ok = psx_vs && psx_fs && clear_vs && clear_fs;
     if (shaders_ok) {
         for (int i = 0; i < BLEND_COUNT; i++) {
-            pipe_tri[i] = CreatePsxPipeline(psx_vs, psx_fs, (BlendMode)i);
+            pipe_tri[i] =
+                CreatePsxPipeline(psx_vs, psx_fs, (BlendMode)i, false);
+#ifndef NO_AO_SHADERS
+            pipe_tri_depth[i] =
+                CreatePsxPipeline(psx_vs, psx_fs, (BlendMode)i, true);
+#endif
         }
-        pipe_clear = CreateClearPipeline(clear_vs, clear_fs);
+        pipe_clear = CreateClearPipeline(clear_vs, clear_fs, false);
+#ifndef NO_AO_SHADERS
+        pipe_depth_clear = CreateClearPipeline(clear_vs, clear_fs, true);
+#endif
+    }
+    // ambient occlusion is optional: without its pipelines it stays off
+    if (full_vs && ao_fs && ao_comp_fs) {
+        pipe_ao = CreateFullscreenPipeline(
+            full_vs, ao_fs, SDL_GPU_TEXTUREFORMAT_R8_UNORM);
+        pipe_ao_composite = CreateFullscreenPipeline(
+            full_vs, ao_comp_fs, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+    }
+    if (full_vs) {
+        SDL_ReleaseGPUShader(device, full_vs);
+    }
+    if (ao_fs) {
+        SDL_ReleaseGPUShader(device, ao_fs);
+    }
+    if (ao_comp_fs) {
+        SDL_ReleaseGPUShader(device, ao_comp_fs);
     }
     if (psx_vs) {
         SDL_ReleaseGPUShader(device, psx_vs);
@@ -524,6 +640,128 @@ static void UpdateScissor(void);
 
 static SDL_GPUTexture* GetRenderTarget(void) {
     return internal_res <= 1 ? vram_render : scaled_vram_render;
+}
+
+static void ReleaseAoTargets(void) {
+    SDL_GPUTexture** t[] = {&vram_depth, &ao_raw, &ao_out};
+    for (int i = 0; i < (int)LEN(t); i++) {
+        if (*t[i]) {
+            SDL_ReleaseGPUTexture(device, *t[i]);
+            *t[i] = NULL;
+        }
+    }
+    vram_depth_w = vram_depth_h = ao_w = ao_h = 0;
+}
+
+// Ambient occlusion is drawn: asked for, its pipelines made, and every VRAM
+// pixel drawn one render pixel per position (no horizontal grid).
+static bool AoActive(void) {
+    return precise_ao_radius > 0 && pipe_ao && pipe_ao_composite &&
+           pipe_depth_clear && pipe_tri_depth[BLEND_ADD] &&
+           pipe_tri_depth[BLEND_SUB] && pipe_tri_depth[BLEND_SUB_OPAQUE] &&
+           GetDrawGridXScale() == 1.0f;
+}
+
+static SDL_GPUTexture* CreateTarget(
+    SDL_GPUTextureFormat format, Uint32 w, Uint32 h) {
+    const SDL_GPUTextureCreateInfo info = {
+        .type = SDL_GPU_TEXTURETYPE_2D,
+        .format = format,
+        .usage =
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        .width = w,
+        .height = h,
+        .layer_count_or_depth = 1,
+        .num_levels = 1,
+    };
+    SDL_GPUTexture* t = SDL_CreateGPUTexture(device, &info);
+    if (!t) {
+        ERRORF("ambient occlusion texture creation failed (%ux%u): %s", w, h,
+               SDL_GetError());
+    }
+    return t;
+}
+
+// vram_depth, the size of the render target and empty (no depth) when new.
+static bool EnsureDepthTarget(SDL_GPUCommandBuffer* cmd) {
+    const Uint32 w = VRAM_W * internal_res, h = VRAM_H * internal_res;
+    if (vram_depth && vram_depth_w == w && vram_depth_h == h) {
+        return true;
+    }
+    ReleaseAoTargets();
+    vram_depth = CreateTarget(DEPTH_FORMAT, w, h);
+    if (!vram_depth) {
+        return false;
+    }
+    vram_depth_w = w;
+    vram_depth_h = h;
+    const SDL_GPUColorTargetInfo target = {
+        .texture = vram_depth,
+        .load_op = SDL_GPU_LOADOP_CLEAR,
+        .store_op = SDL_GPU_STOREOP_STORE,
+    };
+    SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cmd, &target, 1, NULL));
+    return true;
+}
+
+// Forgets the depth under the quad in clear_vbuf: a VRAM area the game
+// cleared, loaded or copied into holds no polygon of ours any more.
+static void ClearDepthUnderQuad(SDL_GPUCommandBuffer* cmd) {
+    const SDL_GPUColorTargetInfo target = {
+        .texture = vram_depth,
+        .load_op = SDL_GPU_LOADOP_LOAD,
+        .store_op = SDL_GPU_STOREOP_STORE,
+    };
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &target, 1, NULL);
+    SDL_BindGPUGraphicsPipeline(pass, pipe_depth_clear);
+    const SDL_GPUBufferBinding vb = {.buffer = clear_vbuf};
+    SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+    SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+}
+
+static void UploadClearQuad(SDL_GPUCommandBuffer* cmd, int x, int y, int w,
+                            int h, u_char r, u_char g, u_char b) {
+    Vertex quad[4] = {0};
+    quad[0].x = (float)x;
+    quad[0].y = (float)y;
+    quad[1].x = (float)(short)(x + w);
+    quad[1].y = (float)y;
+    quad[2].x = (float)x;
+    quad[2].y = (float)(short)(y + h);
+    quad[3].x = (float)(short)(x + w);
+    quad[3].y = (float)(short)(y + h);
+    for (int i = 0; i < 4; i++) {
+        quad[i].r = r;
+        quad[i].g = g;
+        quad[i].b = b;
+        quad[i].a = 0;
+    }
+    Vertex* map = SDL_MapGPUTransferBuffer(device, vtx_transfer, true);
+    if (!map) {
+        ERRORF("SDL_MapGPUTransferBuffer: %s", SDL_GetError());
+        return;
+    }
+    memcpy(map, quad, sizeof(quad));
+    SDL_UnmapGPUTransferBuffer(device, vtx_transfer);
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    const SDL_GPUTransferBufferLocation src = {.transfer_buffer = vtx_transfer};
+    const SDL_GPUBufferRegion dst = {
+        .buffer = clear_vbuf, .size = sizeof(quad)};
+    SDL_UploadToGPUBuffer(copy, &src, &dst, true);
+    SDL_EndGPUCopyPass(copy);
+}
+
+static void ClearDepthRect(int x, int y, int w, int h) {
+    if (!vram_depth || w <= 0 || h <= 0) {
+        return;
+    }
+    SDL_GPUCommandBuffer* cmd = AcquireCmd();
+    if (!cmd) {
+        return;
+    }
+    UploadClearQuad(cmd, x, y, w, h, 0, 0, 0);
+    ClearDepthUnderQuad(cmd);
 }
 
 static SDL_Rect vram_dirty = {0, 0, 0, 0};
@@ -767,6 +1005,86 @@ static void BlitGameToSwapchain(
     SDL_BlitGPUTexture(cmd, &blit);
 }
 
+// Draws the picture in src darkened by its ambient occlusion into ao_out, and
+// points src there; leaves src alone when it can't. The picture's SXY are
+// taken to start at its corner: the game drew it with the draw offset at the
+// display area, as double-buffered games do.
+static void DrawAmbientOcclusion(
+    SDL_GPUCommandBuffer* cmd, SDL_GPUBlitRegion* src) {
+    if (!AoActive() || !vram_depth || vram_depth_w != VRAM_W * internal_res ||
+        src->w == 0 || src->h == 0) {
+        return;
+    }
+    if (!ao_out || ao_w != src->w || ao_h != src->h) {
+        if (ao_raw) {
+            SDL_ReleaseGPUTexture(device, ao_raw);
+        }
+        if (ao_out) {
+            SDL_ReleaseGPUTexture(device, ao_out);
+        }
+        ao_raw = CreateTarget(SDL_GPU_TEXTUREFORMAT_R8_UNORM, src->w, src->h);
+        ao_out =
+            CreateTarget(SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, src->w, src->h);
+        ao_w = ao_h = 0;
+        if (!ao_raw || !ao_out) {
+            return;
+        }
+        ao_w = src->w;
+        ao_h = src->h;
+    }
+    const PreciseProjection pr = precise_projection;
+    const float ao_ubo[12] = {
+        (float)src->x,
+        (float)src->y,
+        (float)src->w,
+        (float)src->h,
+        pr.fx,
+        pr.fy,
+        pr.cx,
+        pr.cy,
+        (float)precise_ao_radius,
+        (float)src->h / 6.0f,
+        (float)internal_res,
+        0.0f};
+    const SDL_GPUColorTargetInfo ao_target = {
+        .texture = ao_raw,
+        .load_op = SDL_GPU_LOADOP_DONT_CARE,
+        .store_op = SDL_GPU_STOREOP_STORE,
+    };
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ao_target, 1, NULL);
+    SDL_BindGPUGraphicsPipeline(pass, pipe_ao);
+    const SDL_GPUTextureSamplerBinding depth_binding = {
+        .texture = vram_depth, .sampler = vram_sampler};
+    SDL_BindGPUFragmentSamplers(pass, 0, &depth_binding, 1);
+    SDL_PushGPUFragmentUniformData(cmd, 0, ao_ubo, sizeof(ao_ubo));
+    SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+
+    const float comp_ubo[8] = {
+        (float)src->x,       (float)src->y, (float)src->w, (float)src->h,
+        precise_ao_strength, 0.0f,          0.0f,          0.0f};
+    const SDL_GPUColorTargetInfo out_target = {
+        .texture = ao_out,
+        .load_op = SDL_GPU_LOADOP_DONT_CARE,
+        .store_op = SDL_GPU_STOREOP_STORE,
+    };
+    pass = SDL_BeginGPURenderPass(cmd, &out_target, 1, NULL);
+    SDL_BindGPUGraphicsPipeline(pass, pipe_ao_composite);
+    const SDL_GPUTextureSamplerBinding comp_bindings[3] = {
+        {.texture = src->texture, .sampler = vram_sampler},
+        {.texture = vram_depth, .sampler = vram_sampler},
+        {.texture = ao_raw, .sampler = vram_sampler},
+    };
+    SDL_BindGPUFragmentSamplers(pass, 0, comp_bindings, 3);
+    SDL_PushGPUFragmentUniformData(cmd, 0, comp_ubo, sizeof(comp_ubo));
+    SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+
+    src->texture = ao_out;
+    src->x = 0;
+    src->y = 0;
+}
+
 static void PlatformBackend_Present(void) {
     if (!sdl3_window && !InitPlatform()) {
         return;
@@ -777,6 +1095,9 @@ static void PlatformBackend_Present(void) {
     }
 
     ApplyPendingInternalRes();
+    if (!AoActive() && vram_depth) {
+        ReleaseAoTargets(); // a fresh, empty one when it comes back on
+    }
 
     SDL_GPUCommandBuffer* cmd = AcquireCmd();
     if (!cmd) {
@@ -817,6 +1138,10 @@ static void PlatformBackend_Present(void) {
                     src.w = VRAM_W * n;
                     src.h = VRAM_H * n;
                     game_aspect = (float)VRAM_W / (float)VRAM_H;
+                }
+
+                if (!debug_show_vram) {
+                    DrawAmbientOcclusion(cmd, &src);
                 }
 
                 WndSize win = {(int)sc_w, (int)sc_h};
@@ -867,6 +1192,18 @@ static void QuitPlatform(void) {
             SDL_ReleaseGPUGraphicsPipeline(device, pipe_clear);
             pipe_clear = NULL;
         }
+        SDL_GPUGraphicsPipeline** ao_pipes[] = {
+            &pipe_depth_clear, &pipe_ao, &pipe_ao_composite};
+        for (int i = 0; i < BLEND_COUNT + (int)LEN(ao_pipes); i++) {
+            SDL_GPUGraphicsPipeline** p =
+                i < BLEND_COUNT ? &pipe_tri_depth[i]
+                                : ao_pipes[i - BLEND_COUNT];
+            if (*p) {
+                SDL_ReleaseGPUGraphicsPipeline(device, *p);
+                *p = NULL;
+            }
+        }
+        ReleaseAoTargets();
         if (vram_render) {
             SDL_ReleaseGPUTexture(device, vram_render);
             vram_render = NULL;
@@ -1450,37 +1787,7 @@ void Draw_ClearImage(PS1_RECT* rect, u_char r, u_char g, u_char b) {
     if (!cmd) {
         return;
     }
-
-    Vertex quad[4] = {0};
-    quad[0].x = rect->x;
-    quad[0].y = rect->y;
-    quad[1].x = (short)(rect->x + rect->w);
-    quad[1].y = rect->y;
-    quad[2].x = rect->x;
-    quad[2].y = (short)(rect->y + rect->h);
-    quad[3].x = (short)(rect->x + rect->w);
-    quad[3].y = (short)(rect->y + rect->h);
-    for (int i = 0; i < 4; i++) {
-        quad[i].r = r;
-        quad[i].g = g;
-        quad[i].b = b;
-        quad[i].a = 0;
-    }
-
-    Vertex* map = SDL_MapGPUTransferBuffer(device, vtx_transfer, true);
-    if (!map) {
-        ERRORF("SDL_MapGPUTransferBuffer: %s", SDL_GetError());
-        return;
-    }
-    memcpy(map, quad, sizeof(quad));
-    SDL_UnmapGPUTransferBuffer(device, vtx_transfer);
-
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    const SDL_GPUTransferBufferLocation src = {.transfer_buffer = vtx_transfer};
-    const SDL_GPUBufferRegion dst = {
-        .buffer = clear_vbuf, .size = sizeof(quad)};
-    SDL_UploadToGPUBuffer(copy, &src, &dst, true);
-    SDL_EndGPUCopyPass(copy);
+    UploadClearQuad(cmd, rect->x, rect->y, rect->w, rect->h, r, g, b);
 
     const SDL_GPUColorTargetInfo target = {
         .texture = vram_render,
@@ -1493,6 +1800,9 @@ void Draw_ClearImage(PS1_RECT* rect, u_char r, u_char g, u_char b) {
     SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
     SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0);
     SDL_EndGPURenderPass(pass);
+    if (vram_depth) {
+        ClearDepthUnderQuad(cmd);
+    }
     MarkVramDirty((SDL_Rect){rect->x, rect->y, rect->w, rect->h});
     SyncNativeVramToScaled(rect->x, rect->y, rect->w, rect->h);
 }
@@ -1540,6 +1850,7 @@ void Draw_LoadImage(PS1_RECT* rect, u_long* p) {
     SDL_EndGPUCopyPass(copy);
     MarkVramDirty((SDL_Rect){rect->x, rect->y, rect->w, rect->h});
     SyncNativeVramToScaled(rect->x, rect->y, rect->w, rect->h);
+    ClearDepthRect(rect->x, rect->y, rect->w, rect->h);
 }
 
 void Draw_StoreImage(PS1_RECT* rect, u_long* p) {
@@ -1632,6 +1943,7 @@ void Draw_MoveImage(PS1_RECT* rect, unsigned int x, unsigned int y) {
     MarkVramDirty((SDL_Rect){dst_x, dst_y, copy_w, copy_h});
     MarkVramDirty((SDL_Rect){src_x, src_y, copy_w, copy_h});
     SyncNativeVramToScaled(dst_x, dst_y, copy_w, copy_h);
+    ClearDepthRect(dst_x, dst_y, copy_w, copy_h);
 }
 
 void Draw_ResetBuffer(void) {
@@ -1686,12 +1998,22 @@ void Draw_FlushBuffer(void) {
     }
     SDL_EndGPUCopyPass(copy);
 
-    const SDL_GPUColorTargetInfo target = {
-        .texture = GetRenderTarget(),
-        .load_op = SDL_GPU_LOADOP_LOAD,
-        .store_op = SDL_GPU_STOREOP_STORE,
+    const bool depth = AoActive() && EnsureDepthTarget(cmd);
+    SDL_GPUGraphicsPipeline** pipes = depth ? pipe_tri_depth : pipe_tri;
+    const SDL_GPUColorTargetInfo targets[2] = {
+        {
+            .texture = GetRenderTarget(),
+            .load_op = SDL_GPU_LOADOP_LOAD,
+            .store_op = SDL_GPU_STOREOP_STORE,
+        },
+        {
+            .texture = vram_depth,
+            .load_op = SDL_GPU_LOADOP_LOAD,
+            .store_op = SDL_GPU_STOREOP_STORE,
+        },
     };
-    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &target, 1, NULL);
+    SDL_GPURenderPass* pass =
+        SDL_BeginGPURenderPass(cmd, targets, depth ? 2 : 1, NULL);
     {
         const float grid_scale_x = GetDrawGridXScale();
         const float render_scale = (float)internal_res;
@@ -1744,17 +2066,17 @@ void Draw_FlushBuffer(void) {
         while (need_subtract && start < end) {
             int group_end = SubtractGroupEnd(start, end);
             Uint32 count = (Uint32)(group_end - start);
-            SDL_BindGPUGraphicsPipeline(pass, pipe_tri[BLEND_SUB]);
+            SDL_BindGPUGraphicsPipeline(pass, pipes[BLEND_SUB]);
             SDL_DrawGPUIndexedPrimitives(pass, count, 1, (Uint32)start, 0, 0);
             if (!is_untextured(&vertex_buf[index_buf[start]])) {
-                SDL_BindGPUGraphicsPipeline(pass, pipe_tri[BLEND_SUB_OPAQUE]);
+                SDL_BindGPUGraphicsPipeline(pass, pipes[BLEND_SUB_OPAQUE]);
                 SDL_DrawGPUIndexedPrimitives(
                     pass, count, 1, (Uint32)start, 0, 0);
             }
             start = group_end;
         }
         if (start < end) {
-            SDL_BindGPUGraphicsPipeline(pass, pipe_tri[BLEND_ADD]);
+            SDL_BindGPUGraphicsPipeline(pass, pipes[BLEND_ADD]);
             SDL_DrawGPUIndexedPrimitives(
                 pass, (Uint32)(end - start), 1, (Uint32)start, 0, 0);
             start = end;

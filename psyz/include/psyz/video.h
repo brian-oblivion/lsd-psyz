@@ -182,6 +182,23 @@ PsyzGeometry Psyz_VideoGetGeometry(void);
 int Psyz_VideoSetGeometry(PsyzGeometry geometry);
 
 /**
+ * @brief Set screen-space ambient occlusion (default: off)
+ *
+ * Darkens creases, corners and contacts from the depth of the polygons the
+ * GTE projected, at any geometry mode. The darkening is applied to the
+ * picture on its way to the window; VRAM, and everything the game reads
+ * back, keeps the console's values. Polygons without a depth for every
+ * vertex (2D, sprites, a vertex behind the eye) get none. SDL3 GPU and
+ * OpenGL (not GLES) only. Needs a build with PSYZ_PRECISE_GEOMETRY.
+ *
+ * @param radius how far occluders reach, in view-space (GTE) units; 0 turns
+ * it off
+ * @param strength how dark a fully occluded point gets, 1 the usual amount
+ * @return 0 on success, -1 if invalid or not built in
+ */
+int Psyz_VideoSetAmbientOcclusion(int radius, float strength);
+
+/**
  * @brief Get the current aspect mode
  *
  * @return current aspect mode

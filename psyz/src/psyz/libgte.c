@@ -1935,6 +1935,10 @@ static void PreciseProject(
     pv->x = (float)px;
     pv->y = (float)py;
     pv->w = (float)(vz / 4096.0);
+    precise_projection.fx = (float)((double)sx_scale / 65536.0 * H);
+    precise_projection.fy = (float)H;
+    precise_projection.cx = (float)OFX;
+    precise_projection.cy = (float)OFY;
 }
 
 #define RTP_VERTEX(                                                            \
@@ -1971,7 +1975,7 @@ static void PreciseProject(
         SAT_FLAG(sy, sy, -0x400, 0x3FF, FLAG_SY2_SAT, f);                      \
         if (PRECISE_TRACK) {                                                   \
             (pv).w = (pv).fade = 0.0f;                                         \
-            if (PRECISE_ON) {                                                  \
+            if (PRECISE_PROJECT) {                                             \
                 PreciseProject(&(pv), sf, rv_x, rv_y, rv_z, sx, sy);           \
             }                                                                  \
         }                                                                      \

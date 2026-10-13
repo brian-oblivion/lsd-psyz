@@ -14,6 +14,8 @@ layout(location = 10) flat in ivec2 pageBase;
 layout(location = 11) flat in uvec4 texWindow;
 layout(location = 12) noperspective in vec4 vertexColorAffine;
 layout(location = 13) flat in uint perspective;
+layout(location = 14) noperspective in float invDepth;
+layout(location = 15) flat in uint hasDepth;
 
 layout(set = 2, binding = 0) uniform sampler2D texVram;
 
@@ -24,6 +26,17 @@ uvec2 resolveTexel() {
 }
 
 layout(location = 0) out vec4 FragColor;
+// Ambient occlusion's depth target (RGBA16F, blended by alpha): the depth
+// split into a half float and the rest, alpha 1 to write it (0 where the
+// pixel has no depth) and 0 to keep what is there (transparent and
+// semi-transparent pixels). Ignored by the pipelines without the target.
+layout(location = 1) out vec4 DepthOut;
+
+vec4 depthWrite() {
+    float z = hasDepth != 0u ? 1.0 / invDepth : 0.0;
+    float hi = unpackHalf2x16(packHalf2x16(vec2(z, 0.0))).x;
+    return vec4(hi, z - hi, 0.0, 1.0);
+}
 
 uint rgb5551ToU16(vec4 c) {
     uint r = uint(c.r * 31.0 + 0.5);
@@ -67,6 +80,7 @@ void main() {
     // check for full transparency
     if (texColor == vec4(0, 0, 0, 0)) {
         FragColor = vec4(0);
+        DepthOut = vec4(0);
         return;
     }
     // check for setSemiTrans(p, 1)
@@ -96,6 +110,7 @@ void main() {
     }
     modColor = applyDither(modColor);
     // pre-multiplied alpha output for ONE, ONE_MINUS_SRC_ALPHA blending
+    DepthOut = colorSemiTrans && isSemiTrans ? vec4(0) : depthWrite();
     if (colorSemiTrans && isSemiTrans) {
         uint abr = (tpage & 0x60u) >> 5u;
         if (abr == 0u) {

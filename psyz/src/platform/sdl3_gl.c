@@ -70,6 +70,10 @@ static const char vertex_shader_body[] = {
     // with w, but its colour across the screen as the console does
     "NOPERSPECTIVE out vec4 vertexColorAffine;\n"
     "flat out uint perspective;\n"
+    // ambient occlusion's depth: 1/w interpolated across the screen is
+    // 1/depth at every pixel, whether or not the UV has perspective
+    "NOPERSPECTIVE out float invDepth;\n"
+    "flat out uint hasDepth;\n"
     "\n"
     "void main() {\n"
     // a line's quad is already laid out around the pixel centres
@@ -79,6 +83,8 @@ static const char vertex_shader_body[] = {
     "    float y = ((pos.y + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;\n"
     "    float w = (uint(tex.w) & 0x0800u) != 0u ? pos.z : 1.0;\n"
     "    perspective = (uint(tex.w) & 0x0800u) != 0u ? 1u : 0u;\n"
+    "    hasDepth = pos.z > 0.0 ? 1u : 0u;\n"
+    "    invDepth = pos.z > 0.0 ? 1.0 / pos.z : 0.0;\n"
     "    gl_Position = vec4(x * w, y * w, 0.0, w);\n"
     // gouraud colors
     "    vec4 vertexColor = color;\n"
@@ -126,8 +132,16 @@ static const char fragment_shader_body[] = {
     "in vec4 vertexColorSmooth;\n"
     "NOPERSPECTIVE in vec4 vertexColorAffine;\n"
     "flat in uint perspective;\n"
+    "NOPERSPECTIVE in float invDepth;\n"
+    "flat in uint hasDepth;\n"
     "in vec2 rawUV;\n"
-    "out vec4 FragColor;\n"
+    "layout(location = 0) out vec4 FragColor;\n"
+    // Ambient occlusion's depth (RGBA16F): the depth split into what a half
+    // float holds and the rest, alpha 1 to write it (0 where the pixel has no
+    // depth), all 0 to keep what is there (transparent and semi-transparent
+    // pixels): the colour's blend keeps or replaces it. Ignored when the FBO
+    // has no second buffer.
+    "layout(location = 1) out vec4 DepthOut;\n"
     "flat in uint clut;\n"
     "flat in uint tpage;\n"
     "flat in uint textureMode;\n"
@@ -139,6 +153,15 @@ static const char fragment_shader_body[] = {
     "flat in ivec2 pageBase;\n"
     "flat in uvec4 texWindow;\n"
     "uniform sampler2D texVram;\n"
+    "\n"
+    "vec4 depthWrite() {\n"
+    "    float z = hasDepth != 0u ? 1.0 / invDepth : 0.0;\n"
+    "    if (z <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);\n"
+    // z rounded to the 11 significant bits a half float keeps
+    "    float e = exp2(floor(log2(z)) - 10.0);\n"
+    "    float hi = floor(z / e + 0.5) * e;\n"
+    "    return vec4(hi, z - hi, 0.0, 1.0);\n"
+    "}\n"
     "\n"
     "uvec2 resolveTexel() {\n"
     "    vec2 uv = rawUV + 1.0 / 512.0;\n"
@@ -191,6 +214,7 @@ static const char fragment_shader_body[] = {
     // check for full transparency
     "    if (texColor == vec4(0, 0, 0, 0)) {\n"
     "        FragColor = vec4(0);\n"
+    "        DepthOut = vec4(0);\n"
     "        return;\n"
     "    }\n"
     // check for setSemiTrans(p, 1)
@@ -221,6 +245,7 @@ static const char fragment_shader_body[] = {
     "    }\n"
     "    modColor = applyDither(modColor);\n"
     // pre-multiplied alpha output for GL_ONE, GL_ONE_MINUS_SRC_ALPHA blending
+    "    DepthOut = colorSemiTrans && isSemiTrans ? vec4(0) : depthWrite();\n"
     "    if (colorSemiTrans && isSemiTrans) {\n"
     "        uint abr = (tpage & 0x60u) >> 5u;\n"
     "        if (abr == 0u) {\n"
@@ -235,6 +260,194 @@ static const char fragment_shader_body[] = {
     "    } else {\n"
     "        FragColor = vec4(modColor, 1.0) * keep;\n" // full opacity
     "    }\n"
+    "}\n"};
+
+// Ambient occlusion's passes over the displayed picture: shaders/ao.frag.glsl
+// and shaders/ao_composite.frag.glsl for GLSL 330 (not GLSL ES: ambient
+// occlusion is off there). The rows follow the draw FBO's, bottom-up like it.
+static const char fullscreen_vertex_body[] = {
+    "void main() {\n"
+    "    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & "
+    "2));\n"
+    "    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n"};
+
+static const char ao_fragment_body[] = {
+    "uniform sampler2D texDepth;\n"
+    "uniform vec4 region;\n"
+    "uniform vec4 proj;\n"
+    "uniform vec4 params;\n"
+    "out vec4 AoOut;\n"
+    "const vec3 kernel[16] = vec3[](\n"
+    "    vec3(0.0003, 0.0763, 0.0700),\n"
+    "    vec3(-0.0721, -0.0368, 0.0803),\n"
+    "    vec3(0.0055, 0.1235, 0.0453),\n"
+    "    vec3(-0.1118, 0.0882, 0.0643),\n"
+    "    vec3(0.0826, -0.1597, 0.0544),\n"
+    "    vec3(-0.1463, -0.0992, 0.1417),\n"
+    "    vec3(-0.0486, -0.2620, 0.0561),\n"
+    "    vec3(0.0201, -0.0240, 0.3235),\n"
+    "    vec3(-0.3751, -0.0338, 0.0789),\n"
+    "    vec3(-0.3679, -0.1149, 0.2353),\n"
+    "    vec3(-0.2725, 0.3574, 0.2721),\n"
+    "    vec3(-0.0186, 0.5058, 0.3338),\n"
+    "    vec3(-0.4573, 0.4522, 0.2611),\n"
+    "    vec3(-0.5279, 0.0328, 0.5855),\n"
+    "    vec3(-0.2558, 0.7976, 0.3039),\n"
+    "    vec3(-0.8998, 0.0559, 0.4327));\n"
+    "const float bayer[16] = float[](\n"
+    "    0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,\n"
+    "    3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);\n"
+    "float depthAt(ivec2 p) {\n"
+    "    if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, "
+    "ivec2(region.zw)))) {\n"
+    "        return 0.0;\n"
+    "    }\n"
+    "    vec4 d = texelFetch(texDepth, ivec2(region.xy) + p, 0);\n"
+    "    return d.r + d.g;\n"
+    "}\n"
+    "float surfaceDepthAt(ivec2 p) {\n"
+    "    float z = depthAt(p);\n"
+    "    if (z <= 0.0) {\n"
+    "        return z;\n"
+    "    }\n"
+    "    float l = depthAt(p - ivec2(1, 0)), r = depthAt(p + ivec2(1, 0));\n"
+    "    if (l > 0.0 && r > 0.0 && z > max(l, r) * 1.005) {\n"
+    "        return 0.5 * (l + r);\n"
+    "    }\n"
+    "    float u = depthAt(p - ivec2(0, 1)), d = depthAt(p + ivec2(0, 1));\n"
+    "    if (u > 0.0 && d > 0.0 && z > max(u, d) * 1.005) {\n"
+    "        return 0.5 * (u + d);\n"
+    "    }\n"
+    "    return z;\n"
+    "}\n"
+    "vec3 viewPos(vec2 p, float z) {\n"
+    "    vec2 s = p / params.z;\n"
+    "    return vec3((s.x - proj.z) * z / proj.x, (s.y - proj.w) * z / proj.y, "
+    "z);\n"
+    "}\n"
+    "vec3 tangent(ivec2 p, vec2 pc, vec3 P, ivec2 d) {\n"
+    "    float a1 = depthAt(p + d), a2 = depthAt(p + 2 * d);\n"
+    "    float b1 = depthAt(p - d), b2 = depthAt(p - 2 * d);\n"
+    "    float ea = a1 <= 0.0 ? 1e30 : a2 > 0.0 ? abs(2.0 * a1 - a2 - P.z) : "
+    "abs(a1 - P.z);\n"
+    "    float eb = b1 <= 0.0 ? 1e30 : b2 > 0.0 ? abs(2.0 * b1 - b2 - P.z) : "
+    "abs(b1 - P.z);\n"
+    "    if (a1 > 0.0 && ea <= eb) {\n"
+    "        return viewPos(pc + vec2(d), a1) - P;\n"
+    "    }\n"
+    "    if (b1 > 0.0) {\n"
+    "        return P - viewPos(pc - vec2(d), b1);\n"
+    "    }\n"
+    "    return vec3(d, 0.0);\n"
+    "}\n"
+    "void main() {\n"
+    "    ivec2 p = ivec2(gl_FragCoord.xy);\n"
+    "    float z = surfaceDepthAt(p);\n"
+    "    if (z <= 0.0) {\n"
+    "        AoOut = vec4(1.0);\n"
+    "        return;\n"
+    "    }\n"
+    "    vec2 pc = vec2(p) + 0.5;\n"
+    "    vec3 P = viewPos(pc, z);\n"
+    "    vec3 n = normalize(cross(tangent(p, pc, P, ivec2(1, 0)),\n"
+    "                             tangent(p, pc, P, ivec2(0, 1))));\n"
+    "    if (dot(n, P) > 0.0) {\n"
+    "        n = -n;\n"
+    "    }\n"
+    "    float radius = params.x;\n"
+    "    float span = radius * proj.x * params.z / z;\n"
+    "    if (span < 1.0) {\n"
+    "        AoOut = vec4(1.0);\n"
+    "        return;\n"
+    "    }\n"
+    "    radius *= min(1.0, params.y / span);\n"
+    "    float a = 6.2831853 * (bayer[(p.y & 3) * 4 + (p.x & 3)] + 0.5) / "
+    "16.0;\n"
+    "    vec3 r = vec3(cos(a), sin(a), 0.0);\n"
+    "    vec3 t = r - n * dot(r, n);\n"
+    "    if (dot(t, t) < 1e-6) {\n"
+    "        t = vec3(0.0, cos(a), sin(a)) - n * dot(vec3(0.0, cos(a), "
+    "sin(a)), n);\n"
+    "    }\n"
+    "    t = normalize(t);\n"
+    "    vec3 b = cross(n, t);\n"
+    "    float bias = radius * 0.03 + z * 0.01;\n"
+    "    float occ = 0.0;\n"
+    "    for (int i = 0; i < 16; i++) {\n"
+    "        vec3 k = kernel[i];\n"
+    "        vec3 S = P + (t * k.x + b * k.y + n * k.z) * radius;\n"
+    "        if (S.z <= 1.0) {\n"
+    "            continue;\n"
+    "        }\n"
+    "        vec2 sp = vec2(proj.z + proj.x * S.x / S.z, proj.w + proj.y * S.y "
+    "/ S.z) *\n"
+    "                  params.z;\n"
+    "        float sz = depthAt(ivec2(floor(sp)));\n"
+    "        if (sz <= 0.0) {\n"
+    "            continue;\n"
+    "        }\n"
+    "        float range = clamp(radius / abs(z - sz), 0.0, 1.0);\n"
+    "        occ += (sz < S.z - bias ? 1.0 : 0.0) * range;\n"
+    "    }\n"
+    "    AoOut = vec4(1.0 - occ / 16.0);\n"
+    "}\n"};
+
+static const char ao_composite_fragment_body[] = {
+    "uniform sampler2D texColor;\n"
+    "uniform sampler2D texDepth;\n"
+    "uniform sampler2D texAo;\n"
+    "uniform vec4 region;\n"
+    "uniform vec4 params;\n"
+    "out vec4 FragColor;\n"
+    "float depthAt(ivec2 p) {\n"
+    "    if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, "
+    "ivec2(region.zw)))) {\n"
+    "        return 0.0;\n"
+    "    }\n"
+    "    vec4 d = texelFetch(texDepth, ivec2(region.xy) + p, 0);\n"
+    "    return d.r + d.g;\n"
+    "}\n"
+    "float surfaceDepthAt(ivec2 p) {\n"
+    "    float z = depthAt(p);\n"
+    "    if (z <= 0.0) {\n"
+    "        return z;\n"
+    "    }\n"
+    "    float l = depthAt(p - ivec2(1, 0)), r = depthAt(p + ivec2(1, 0));\n"
+    "    if (l > 0.0 && r > 0.0 && z > max(l, r) * 1.005) {\n"
+    "        return 0.5 * (l + r);\n"
+    "    }\n"
+    "    float u = depthAt(p - ivec2(0, 1)), d = depthAt(p + ivec2(0, 1));\n"
+    "    if (u > 0.0 && d > 0.0 && z > max(u, d) * 1.005) {\n"
+    "        return 0.5 * (u + d);\n"
+    "    }\n"
+    "    return z;\n"
+    "}\n"
+    "void main() {\n"
+    "    ivec2 p = ivec2(gl_FragCoord.xy);\n"
+    "    vec4 c = texelFetch(texColor, ivec2(region.xy) + p, 0);\n"
+    "    float z = surfaceDepthAt(p);\n"
+    "    if (z <= 0.0) {\n"
+    "        FragColor = c;\n"
+    "        return;\n"
+    "    }\n"
+    "    float sum = 0.0, wsum = 0.0;\n"
+    "    for (int dy = -2; dy <= 1; dy++) {\n"
+    "        for (int dx = -2; dx <= 1; dx++) {\n"
+    "            ivec2 q = p + ivec2(dx, dy);\n"
+    "            float zq = depthAt(q);\n"
+    "            if (zq <= 0.0) {\n"
+    "                continue;\n"
+    "            }\n"
+    "            float d = (zq - z) / (0.02 * z + 1.0);\n"
+    "            float w = exp(-d * d);\n"
+    "            sum += texelFetch(texAo, q, 0).r * w;\n"
+    "            wsum += w;\n"
+    "        }\n"
+    "    }\n"
+    "    float ao = wsum > 0.0 ? sum / wsum : 1.0;\n"
+    "    ao = clamp(1.0 - (1.0 - ao) * params.x, 0.0, 1.0);\n"
+    "    FragColor = vec4(c.rgb * ao, c.a);\n"
     "}\n"};
 
 typedef struct {
@@ -276,6 +489,22 @@ static GLposi draw_area_end = {0x10000, 0x10000};
 
 static bool CreateScaledVramFbo(int n);
 
+// Ambient occlusion (Psyz_VideoSetAmbientOcclusion): while it is on, the
+// polygons are drawn through ao_draw_fbo, the draw target and ao_depth_tex
+// (the same size) together, so psx's depth lands beside the colour; at
+// present, ao_program and ao_comp_program draw the displayed picture
+// darkened into ao_out_tex, which goes to the window instead. VRAM itself is
+// never changed. Not with GLES.
+static GLuint ao_depth_tex = 0, ao_depth_fbo = 0; // the depth alone
+static GLuint ao_draw_fbo = 0;
+static GLuint ao_draw_color = 0; // the draw target ao_draw_fbo was made with
+static int ao_depth_w = 0, ao_depth_h = 0;
+static GLuint ao_raw_tex = 0, ao_raw_fbo = 0; // R8: before the blur
+static GLuint ao_out_tex = 0, ao_out_fbo = 0; // the picture darkened
+static int ao_w = 0, ao_h = 0;
+static GLuint ao_program = 0, ao_comp_program = 0, ao_vao = 0;
+static bool ao_programs_tried = false;
+
 static bool HasSeparateDrawTarget(void) { return scaled_vram_fbo != 0; }
 
 static GLuint Init_CompileShader(const char* source, GLenum kind) {
@@ -304,11 +533,9 @@ static GLuint Init_CompileShader(const char* source, GLenum kind) {
     return shader;
 }
 
-static GLuint Init_SetupShader() {
-    GLuint vertShader =
-        Init_CompileShader(vertex_shader_body, GL_VERTEX_SHADER);
-    GLuint fragShader =
-        Init_CompileShader(fragment_shader_body, GL_FRAGMENT_SHADER);
+static GLuint Init_LinkProgram(const char* vertex, const char* fragment) {
+    GLuint vertShader = Init_CompileShader(vertex, GL_VERTEX_SHADER);
+    GLuint fragShader = Init_CompileShader(fragment, GL_FRAGMENT_SHADER);
     GLuint program = glCreateProgram();
     glAttachShader(program, vertShader);
     glAttachShader(program, fragShader);
@@ -323,7 +550,15 @@ static GLuint Init_SetupShader() {
     }
     glDeleteShader(vertShader);
     glDeleteShader(fragShader);
+    if (!success) {
+        glDeleteProgram(program);
+        return 0;
+    }
     return program;
+}
+
+static GLuint Init_SetupShader() {
+    return Init_LinkProgram(vertex_shader_body, fragment_shader_body);
 }
 
 static PsyzOverlayInitCB_SDL3GL overlay_init_cb;
@@ -538,6 +773,139 @@ static void SyncScaledVramToNative(void) {
     glEnable(GL_SCISSOR_TEST);
 }
 
+static void DeleteTexFbo(GLuint* tex, GLuint* fbo) {
+    if (*tex) {
+        glDeleteTextures(1, tex);
+        *tex = 0;
+    }
+    if (*fbo) {
+        glDeleteFramebuffers(1, fbo);
+        *fbo = 0;
+    }
+}
+
+static void ReleaseAoTargets(void) {
+    DeleteTexFbo(&ao_depth_tex, &ao_depth_fbo);
+    DeleteTexFbo(&ao_raw_tex, &ao_raw_fbo);
+    DeleteTexFbo(&ao_out_tex, &ao_out_fbo);
+    if (ao_draw_fbo) {
+        glDeleteFramebuffers(1, &ao_draw_fbo);
+        ao_draw_fbo = 0;
+    }
+    ao_draw_color = 0;
+    ao_depth_w = ao_depth_h = ao_w = ao_h = 0;
+}
+
+// A w x h texture of the format and an FBO drawing to it; false if they
+// can't be made.
+static bool CreateTexFbo(GLuint* tex, GLuint* fbo, GLint internal,
+                         GLenum format, GLenum type, int w, int h) {
+    glGenTextures(1, tex);
+    glBindTexture(GL_TEXTURE_2D, *tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, format, type, NULL);
+    glGenFramebuffers(1, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *tex, 0);
+    bool ok =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindTexture(GL_TEXTURE_2D, vram_texture);
+    if (!ok) {
+        ERRORF("ambient occlusion FBO creation failed (%dx%d)", w, h);
+        DeleteTexFbo(tex, fbo);
+    }
+    return ok;
+}
+
+// Ambient occlusion is drawn: asked for, not GLES, its programs made, and
+// every VRAM pixel drawn one render pixel per position (no horizontal grid).
+static bool AoActive(void) {
+    if (precise_ao_radius <= 0 || use_gles || GetDrawGridXScale() != 1.0f) {
+        return false;
+    }
+    if (!ao_programs_tried) {
+        ao_programs_tried = true;
+        ao_program = Init_LinkProgram(fullscreen_vertex_body, ao_fragment_body);
+        ao_comp_program = Init_LinkProgram(
+            fullscreen_vertex_body, ao_composite_fragment_body);
+        glGenVertexArrays(1, &ao_vao);
+        if (ao_comp_program) {
+            glUseProgram(ao_comp_program);
+            glUniform1i(glGetUniformLocation(ao_comp_program, "texColor"), 0);
+            glUniform1i(glGetUniformLocation(ao_comp_program, "texDepth"), 1);
+            glUniform1i(glGetUniformLocation(ao_comp_program, "texAo"), 2);
+        }
+        if (ao_program) {
+            glUseProgram(ao_program);
+            glUniform1i(glGetUniformLocation(ao_program, "texDepth"), 1);
+        }
+        glUseProgram(shader_program);
+    }
+    return ao_program && ao_comp_program;
+}
+
+// ao_depth_tex the size of the draw target, empty (no depth) when new, and
+// ao_draw_fbo drawing to both. The draw FBO is left bound.
+static bool EnsureDepthTarget(void) {
+    const int w = VRAM_W * (int)internal_res, h = VRAM_H * (int)internal_res;
+    const GLuint color =
+        HasSeparateDrawTarget() ? scaled_vram_texture : vram_texture;
+    if (ao_draw_fbo && ao_depth_w == w && ao_depth_h == h &&
+        ao_draw_color == color) {
+        return true;
+    }
+    ReleaseAoTargets();
+    if (!CreateTexFbo(&ao_depth_tex, &ao_depth_fbo, GL_RGBA16F, GL_RGBA,
+                      GL_HALF_FLOAT, w, h)) {
+        BindDrawFbo();
+        return false;
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glGenFramebuffers(1, &ao_draw_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, ao_draw_fbo);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, ao_depth_tex, 0);
+    static const GLenum both[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, both);
+    bool ok =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    BindDrawFbo();
+    if (!ok) {
+        ERRORF("ambient occlusion draw FBO creation failed");
+        ReleaseAoTargets();
+        return false;
+    }
+    ao_depth_w = w;
+    ao_depth_h = h;
+    ao_draw_color = color;
+    return true;
+}
+
+// Forgets the depth in a VRAM area the game cleared, loaded or copied into:
+// it holds no polygon of ours any more. Leaves the draw FBO bound.
+static void ClearDepthRect(int x, int y, int w, int h) {
+    if (!ao_depth_fbo || w <= 0 || h <= 0) {
+        return;
+    }
+    const int n = (int)internal_res;
+    glBindFramebuffer(GL_FRAMEBUFFER, ao_depth_fbo);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x * n, y * n, w * n, h * n);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    BindDrawFbo();
+    UpdateScissor();
+}
+
 static bool CreateScaledVramFbo(int n) {
     if (scaled_vram_texture) {
         glDeleteTextures(1, &scaled_vram_texture);
@@ -702,11 +1070,79 @@ static void BlitGameToWindow(SDL_Rect src, SDL_Rect dst) {
                       dst.y + dst.h, GL_COLOR_BUFFER_BIT, filter);
 }
 
+// Draws the picture at src (draw-FBO pixels) darkened by its ambient
+// occlusion into ao_out_tex, and returns its FBO with src moved to its
+// corner; 0 (src left alone) when it can't. The picture's SXY are taken to
+// start at its corner: the game drew it with the draw offset at the display
+// area, as double-buffered games do.
+static GLuint DrawAmbientOcclusion(SDL_Rect* src) {
+    if (!AoActive() || !ao_depth_tex ||
+        ao_depth_w != VRAM_W * (int)internal_res || src->w <= 0 ||
+        src->h <= 0) {
+        return 0;
+    }
+    if (!ao_out_fbo || ao_w != src->w || ao_h != src->h) {
+        DeleteTexFbo(&ao_raw_tex, &ao_raw_fbo);
+        DeleteTexFbo(&ao_out_tex, &ao_out_fbo);
+        ao_w = ao_h = 0;
+        if (!CreateTexFbo(&ao_raw_tex, &ao_raw_fbo, GL_R8, GL_RED,
+                          GL_UNSIGNED_BYTE, src->w, src->h) ||
+            !CreateTexFbo(&ao_out_tex, &ao_out_fbo, GL_RGBA8, GL_RGBA,
+                          GL_UNSIGNED_BYTE, src->w, src->h)) {
+            return 0;
+        }
+        ao_w = src->w;
+        ao_h = src->h;
+    }
+    const PreciseProjection pr = precise_projection;
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glBindVertexArray(ao_vao);
+    glViewport(0, 0, src->w, src->h);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, ao_depth_tex);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ao_raw_fbo);
+    glUseProgram(ao_program);
+    glUniform4f(glGetUniformLocation(ao_program, "region"), (float)src->x,
+                (float)src->y, (float)src->w, (float)src->h);
+    glUniform4f(
+        glGetUniformLocation(ao_program, "proj"), pr.fx, pr.fy, pr.cx, pr.cy);
+    glUniform4f(
+        glGetUniformLocation(ao_program, "params"), (float)precise_ao_radius,
+        (float)src->h / 6.0f, (float)internal_res, 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ao_out_fbo);
+    glUseProgram(ao_comp_program);
+    glUniform4f(glGetUniformLocation(ao_comp_program, "region"), (float)src->x,
+                (float)src->y, (float)src->w, (float)src->h);
+    glUniform4f(glGetUniformLocation(ao_comp_program, "params"),
+                precise_ao_strength, 0.0f, 0.0f, 0.0f);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ao_raw_tex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,
+                  HasSeparateDrawTarget() ? scaled_vram_texture : vram_texture);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindTexture(GL_TEXTURE_2D, vram_texture);
+    glUseProgram(shader_program);
+    glBindVertexArray(0); // Draw_FlushBuffer binds its own
+    glEnable(GL_BLEND);
+    *src = (SDL_Rect){0, 0, src->w, src->h};
+    return ao_out_fbo;
+}
+
 static void PlatformBackend_Present(void) {
     if (!sdl3_window && !InitPlatform()) {
         return;
     }
     ApplyPendingInternalRes();
+    if (!AoActive() && ao_depth_tex) {
+        ReleaseAoTargets(); // a fresh, empty one when it comes back on
+        BindDrawFbo();
+    }
 
     const int n = (int)internal_res;
     glBindFramebuffer(GL_READ_FRAMEBUFFER, GetDrawFbo());
@@ -734,6 +1170,10 @@ static void PlatformBackend_Present(void) {
 
     if (disp_on) {
         SDL_Rect scaled = {src.x * n, src.y * n, src.w * n, src.h * n};
+        GLuint ao_fbo = debug_show_vram ? 0 : DrawAmbientOcclusion(&scaled);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ao_fbo ? ao_fbo : GetDrawFbo());
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glViewport(0, 0, win.w, win.h);
         BlitGameToWindow(scaled, dst);
     }
     if (overlay_frame_cb) {
@@ -799,6 +1239,20 @@ void ResetPlatform(void) {
         scaled_vram_fbo = 0;
     }
     ReleaseSharpTarget();
+    ReleaseAoTargets();
+    if (ao_program) {
+        glDeleteProgram(ao_program);
+        ao_program = 0;
+    }
+    if (ao_comp_program) {
+        glDeleteProgram(ao_comp_program);
+        ao_comp_program = 0;
+    }
+    if (ao_vao) {
+        glDeleteVertexArrays(1, &ao_vao);
+        ao_vao = 0;
+    }
+    ao_programs_tried = false;
     internal_res = 1;
     free(vram_convert_buf);
     vram_convert_buf = NULL;
@@ -1341,6 +1795,7 @@ void Draw_ClearImage(PS1_RECT* rect, u_char r, u_char g, u_char b) {
                   rect->w * internal_res, rect->h * internal_res);
         glClear(GL_COLOR_BUFFER_BIT);
     }
+    ClearDepthRect(rect->x, rect->y, rect->w, rect->h);
     BindDrawFbo();
     UpdateScissor();
 }
@@ -1363,6 +1818,7 @@ void Draw_LoadImage(PS1_RECT* rect, u_long* p) {
     glTexSubImage2D(GL_TEXTURE_2D, 0, rect->x, rect->y, rect->w, rect->h,
                     GL_RGBA, GL_UNSIGNED_BYTE, buf);
     SyncNativeVramToScaled(rect->x, rect->y, rect->w, rect->h);
+    ClearDepthRect(rect->x, rect->y, rect->w, rect->h);
 }
 void Draw_StoreImage(PS1_RECT* rect, u_long* p) {
     if (rect->w == 0 || rect->h == 0) {
@@ -1477,6 +1933,7 @@ void Draw_MoveImage(PS1_RECT* rect, unsigned int x, unsigned int y) {
         }
     }
     SyncNativeVramToScaled(dst_x, dst_y, copy_w, copy_h);
+    ClearDepthRect(dst_x, dst_y, copy_w, copy_h);
     BindDrawFbo();
     glEnable(GL_SCISSOR_TEST);
 }
@@ -1523,6 +1980,10 @@ void Draw_FlushBuffer(void) {
         Draw_InitBuffer();
     }
 
+    const bool depth = AoActive() && EnsureDepthTarget();
+    if (depth) {
+        glBindFramebuffer(GL_FRAMEBUFFER, ao_draw_fbo);
+    }
     glUseProgram(shader_program);
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
@@ -1578,6 +2039,9 @@ void Draw_FlushBuffer(void) {
             DrawIndices(start, end);
             start = end;
         }
+    }
+    if (depth) {
+        glBindFramebuffer(GL_FRAMEBUFFER, GetDrawFbo());
     }
     SyncScaledVramToNative();
     Draw_ResetBuffer();

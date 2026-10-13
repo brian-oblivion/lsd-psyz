@@ -26,6 +26,10 @@ layout(location = 11) flat out uvec4 texWindow;  // GP0(E2h) as {and.xy, or.zw}
 // w, but its colour across the screen as the console does
 layout(location = 12) noperspective out vec4 vertexColorAffine;
 layout(location = 13) flat out uint perspective;
+// ambient occlusion's depth: 1/w interpolated across the screen is 1/depth
+// at every pixel, whether or not the UV is mapped with perspective
+layout(location = 14) noperspective out float invDepth;
+layout(location = 15) flat out uint hasDepth;
 
 void main() {
     // a line's quad is already laid out around the pixel centres
@@ -34,6 +38,8 @@ void main() {
     float y = ((pos.y + drawOffset.y + shift.y) / (512.0 / 2.0)) - 1.0;
     float w = (tex.w & 0x0800u) != 0u ? pos.z : 1.0;
     perspective = (tex.w & 0x0800u) != 0u ? 1u : 0u;
+    hasDepth = pos.z > 0.0 ? 1u : 0u;
+    invDepth = pos.z > 0.0 ? 1.0 / pos.z : 0.0;
     // SDL_GPU NDC y=-1 is the bottom while texture row 0 is the top; negate Y
     // so VRAM row 0 lands on texture row 0, like the GL FBO convention.
     gl_Position = vec4(x * w, -y * w, 0.0, w);

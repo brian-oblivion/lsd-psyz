@@ -28,15 +28,34 @@ extern PsyzGeometry precise_mode;
 // A depth-cue hook is set: the vertices are carried for their fade, whatever
 // the geometry.
 extern int precise_fade;
+// Ambient occlusion is on (Psyz_VideoSetAmbientOcclusion): the vertices are
+// projected and carried for their depth, whatever the geometry.
+extern int precise_depth;
 
 #ifdef PSYZ_PRECISE_GEOMETRY
 #define PRECISE_ON (precise_mode != PSYZ_GEOMETRY_CONSOLE)
-// The vertices are carried to the GPU: for their positions, or their fade.
-#define PRECISE_TRACK (PRECISE_ON || precise_fade)
+// The GTE projects each vertex precisely: for its position or its depth.
+#define PRECISE_PROJECT (PRECISE_ON || precise_depth)
+// The vertices are carried to the GPU: for their positions, depth or fade.
+#define PRECISE_TRACK (PRECISE_PROJECT || precise_fade)
 #else
 #define PRECISE_ON 0
+#define PRECISE_PROJECT 0
 #define PRECISE_TRACK 0
 #endif
+
+// The projection of the last vertex the GTE projected precisely, in the
+// 16-bit SXY's units: x = cx + fx * X / Z, y = cy + fy * Y / Z. Ambient
+// occlusion rebuilds view-space positions from the depth with it.
+typedef struct {
+    float fx, fy, cx, cy;
+} PreciseProjection;
+extern PreciseProjection precise_projection;
+
+// Ambient occlusion's radius (view units, 0: off) and strength, for the
+// backends that draw it.
+extern int precise_ao_radius;
+extern float precise_ao_strength;
 
 // Carries the vertices for their fade (on) or not; -1 when it can't (a
 // build without PSYZ_PRECISE_GEOMETRY, or no memory for the table).
