@@ -16,9 +16,9 @@
 #include "shaders/psx_frag_dxil.h"
 #include "shaders/clear_vert_dxil.h"
 #include "shaders/clear_frag_dxil.h"
-// No D3D12 build of ambient occlusion's shaders (nor of psx's depth output)
-// yet: build_shaders.sh needs a DXC that runs; ambient occlusion stays off.
-#define NO_AO_SHADERS
+#include "shaders/fullscreen_vert_dxil.h"
+#include "shaders/ao_frag_dxil.h"
+#include "shaders/ao_composite_frag_dxil.h"
 #define psx_vert psx_vert_dxil
 #define psx_vert_len psx_vert_dxil_len
 #define psx_frag psx_frag_dxil
@@ -27,6 +27,12 @@
 #define clear_vert_len clear_vert_dxil_len
 #define clear_frag clear_frag_dxil
 #define clear_frag_len clear_frag_dxil_len
+#define fullscreen_vert fullscreen_vert_dxil
+#define fullscreen_vert_len fullscreen_vert_dxil_len
+#define ao_frag ao_frag_dxil
+#define ao_frag_len ao_frag_dxil_len
+#define ao_composite_frag ao_composite_frag_dxil
+#define ao_composite_frag_len ao_composite_frag_dxil_len
 #elif defined(__APPLE__)
 #include "shaders/psx_vert_msl.h"
 #include "shaders/psx_frag_msl.h"
@@ -496,9 +502,6 @@ static bool CreateGpuResources(void) {
         clear_vert, clear_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
     SDL_GPUShader* clear_fs = CreateShader(
         clear_frag, clear_frag_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0);
-#ifdef NO_AO_SHADERS
-    SDL_GPUShader *full_vs = NULL, *ao_fs = NULL, *ao_comp_fs = NULL;
-#else
     SDL_GPUShader* full_vs = CreateShader(
         fullscreen_vert, fullscreen_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
     SDL_GPUShader* ao_fs =
@@ -506,21 +509,16 @@ static bool CreateGpuResources(void) {
     SDL_GPUShader* ao_comp_fs =
         CreateShader(ao_composite_frag, ao_composite_frag_len,
                      SDL_GPU_SHADERSTAGE_FRAGMENT, 3, 1);
-#endif
     bool shaders_ok = psx_vs && psx_fs && clear_vs && clear_fs;
     if (shaders_ok) {
         for (int i = 0; i < BLEND_COUNT; i++) {
             pipe_tri[i] =
                 CreatePsxPipeline(psx_vs, psx_fs, (BlendMode)i, false);
-#ifndef NO_AO_SHADERS
             pipe_tri_depth[i] =
                 CreatePsxPipeline(psx_vs, psx_fs, (BlendMode)i, true);
-#endif
         }
         pipe_clear = CreateClearPipeline(clear_vs, clear_fs, false);
-#ifndef NO_AO_SHADERS
         pipe_depth_clear = CreateClearPipeline(clear_vs, clear_fs, true);
-#endif
     }
     // ambient occlusion is optional: without its pipelines it stays off
     if (full_vs && ao_fs && ao_comp_fs) {
